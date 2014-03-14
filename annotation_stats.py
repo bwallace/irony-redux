@@ -129,7 +129,9 @@ def get_labeled_thrice_comments():
     cursor.execute(
         '''select comment_id from irony_label group by comment_id having count(labeler_id) >= 3;'''
     )
+
     thricely_labeled_comment_ids = _grab_single_element(cursor.fetchall())
+
     return thricely_labeled_comment_ids
 
 def descriptive_stats():
@@ -170,7 +172,7 @@ def comment_ids_to_human_lbls(human_id):
             lbl_d[id_] = -1
     return lbl_d
 
-def comment_level_computer_agreement_with_humans(comment_ids_to_preds):
+def comment_level_computer_agreement_with_humans(comment_ids_to_preds, verbose=False):
     pairwise_kappas = []
     for human in labelers_of_interest:
         lbl_tuples = []
@@ -183,7 +185,8 @@ def comment_level_computer_agreement_with_humans(comment_ids_to_preds):
                 lbl_tuples.append(('human', str(comment_id), str(human_lbl)))
 
         pw_kappa = nltk.AnnotationTask(data=lbl_tuples).kappa()
-        print "pairwise kappa with %s is: %s" % (human, pw_kappa)
+        if verbose:
+            print "pairwise kappa with %s is: %s" % (human, pw_kappa)
         pairwise_kappas.append(pw_kappa)
     return sum(pairwise_kappas)/float(len(pairwise_kappas))
 
@@ -222,7 +225,9 @@ def pairwise_kappa():
                 agreement(these_labelers=set([str(l) for l in labeler_set]))
         except:
             pdb.set_trace()
-        pairwise_kappas.append(task.kappa())
+        k = task.kappa()
+        print "pairwise kappa for %s: %s" % (labeler_set, k)
+        pairwise_kappas.append(k)
     return sum(pairwise_kappas)/float(len(pairwise_kappas))
 
 # e.g., pairwise annotation task between "4" and "5" like so:
@@ -478,6 +483,7 @@ def n_users_requested_context_for_comment(comment_id):
                 '''select distinct labeler_id from irony_label where forced_decision=1 and comment_id =%s and labeler_id in %s;''' % 
                    (comment_id, labeler_id_str)))
     return forced_decisions
+
 
 def n_users_labeled_as_irony(comment_id):
     ''' how many annotators labeled this comment as containing some irony? '''
@@ -851,6 +857,7 @@ def sentence_classification(use_pretense=False):
             sentence_id = sentence_ids[i]
             #if i < n_conservative_comments:
             if sent_ids_to_subreddits[sentence_id] == "Conservative":
+
                 X[i,conservative_j] = predicted_probabilities_of_being_liberal[i]
             else:
                 X[i, liberal_j-1] = 1.0 # 'liberal intercept'
@@ -940,7 +947,7 @@ def pretense(just_the_model=False):
                     max_features=20000, ngram_range=(1,2), stop_words="english")
     X = vectorizer.fit_transform(comment_texts)
     y = [0 for y_i in xrange(len(conservative_comments))] + [1 for y_i in xrange(len(liberal_comments))]
-    #pdb.set_trace()
+    
 
     #clf = MultinomialNB(alpha=5)
     clf = sklearn.linear_model.LogisticRegression()
@@ -1010,13 +1017,21 @@ def pretense(just_the_model=False):
     unironic_liberal_avg = sum(unironic_liberal_ps)/float(len(unironic_liberal_ps))
     #pdb.set_trace()
 
-   
+
+'''
+human baseline
+'''
+def human_baseline():
+    for human in labelers_of_interest:
+        pass
+
 '''
 pretense_baseline and pretense both use only comments from progressive
 and conservative subreddits. If pretense is true, we add the 'pretense'
 feature for prediction
 '''
-def pretense_experiment(use_pretense=False, at_least=1):
+def pretense_experiment(use_pretense=False, at_least=1, model="SGD", 
+                        verbose=False, interaction_features=False):
     print "building progressive/conservative model!"
     # @TODO refactor -- this is redundant with code above!!!
     labeled_comment_ids = get_labeled_thrice_comments()
@@ -1041,10 +1056,12 @@ def pretense_experiment(use_pretense=False, at_least=1):
         X = vectorizer.transform(grab_comments(all_comment_ids))
         #X = vectorizer.fit_transform(comment_texts)
         for x_i in X:
-            p_i = clf.predict_proba(x_i)[0][1]
+            #p_i = clf.predict_proba(x_i)[0][1]
+            p_i = clf.predict(x_i)[0]
+            #pdb.set_trace()
             predicted_probabilities_of_being_liberal.append(p_i)
-
-    
+    #pdb.set_trace()
+        
     comment_texts, y = [], []
     for id_ in all_comment_ids:
         comment_texts.append(grab_comments([id_])[0])
@@ -1055,20 +1072,18 @@ def pretense_experiment(use_pretense=False, at_least=1):
 
 
     vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
-                                        max_features=20000, ngram_range=(1,2), 
+                                        max_features=10000, ngram_range=(1,2), 
                                         stop_words="english")
     X = vectorizer.fit_transform(comment_texts)
-
-    x0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
+    
+    x0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
     X = scipy.sparse.hstack((X, x0)).tocsr()
     
     ###
     # now add pretense features!
     if use_pretense:
         conservative_j = X.shape[1] - 1
-        liberal_j = X.shape[1] - 2
-        #conservative_i = vectorizer.vocabulary_["ixconservativeix"]
-        #liberal_i = vectorizer.vocabulary_["ixliberalix"]
+        liberal_j = X.shape[1] - 3
 
         # for each instance, add an interaction 
         # (political or liberal subreddit x predicted political orientation)
@@ -1076,33 +1091,50 @@ def pretense_experiment(use_pretense=False, at_least=1):
         #    X[i,liberal_j] = predicted_probabilities_of_being_liberal[i]
         
         for i in xrange(X.shape[0]):
-            if i < n_conservative_comments:
-                #pdb.set_trace()
-                #X[i,conservative_j] = 1.0
-                pass
-                #X[i,conservative_j] = predicted_probabilities_of_being_liberal[i]
+            if not interaction_features:
+                # just one feature (not crossed with subreddit)
+                X[i,liberal_j] = predicted_probabilities_of_being_liberal[i]#1.0
 
             else:
-                #X[i, liberal_j-1] = 1.0 # 'liberal intercept'
-                #X[i,liberal_j] = predicted_probabilities_of_being_liberal[i]
-                pass
-                #X[i,liberal_i] = 1
+                # interaction features
+                if i < n_conservative_comments:
+                    #pdb.set_trace()
+                    X[i,conservative_j-1] = 1.0
+                    X[i,conservative_j] = predicted_probabilities_of_being_liberal[i]
+
+                else:
+                    X[i, liberal_j-1] = 1.0 # 'liberal intercept'
+                    X[i,liberal_j] = predicted_probabilities_of_being_liberal[i]
+                    #pass
+                    #X[i,liberal_i] = 1
             
             ### SANITY CHECK BY CHEATING
             #X[i,conservative_j] = y[i]
     #pdb.set_trace()
-    kf = KFold(len(y), n_folds=5, shuffle=True, random_state=31415)
+    kf = KFold(len(y), n_folds=5, shuffle=True, random_state=5)
     recalls, precisions, Fs, AUCs = [], [], [], []
     avg_pw_kappas = []
     test_comments = []
+
     for train, test in kf:
         train_ids = _get_entries(all_comment_ids, train)
         test_ids = _get_entries(all_comment_ids, test)
         y_train = _get_entries(y, train)
         y_test = _get_entries(y, test)
 
-        print "p: %s" % (y_test.count(1)/float(len(y_test)))
-        #pdb.set_trace()
+        p_train = (y_train.count(1))/float(len(y_train))
+        if verbose:
+            print "p train: %s" % p_train
+            print "p test: %s" % (y_test.count(1)/float(len(y_test)))
+
+        if model=="baseline":
+            import random
+            # guess at chance
+            def baseline_clf(): # no input!
+                if random.random() < p_train:
+                    return 1
+                return -1
+
         test_comment_texts = _get_entries(comment_texts, test)
         test_comments.append(test_comment_texts)
 
@@ -1110,33 +1142,35 @@ def pretense_experiment(use_pretense=False, at_least=1):
         X_train, X_test = X[train], X[test]
         
 
-        svm = SGDClassifier(loss="hinge", penalty="l2", class_weight="auto", n_iter=2000)
-        parameters = {'alpha':[.0001, .001, .01, .1]}
-        clf = GridSearchCV(svm, parameters, scoring='f1')
-        '''
-        clf = svm
-        '''
+        clf, preds = None, None
+        if model=="baseline":
+            preds = [baseline_clf() for i in xrange(X_test.shape[0])]
+        else:
+            svm = None
+            if model=="SGD":
+                svm = SGDClassifier(loss="hinge", penalty="l2", class_weight="auto", n_iter=2000)
+                parameters = {'alpha':[.0001, .001, .01, .1]}
+            else:
+                svm = LinearSVC(loss='l2', class_weight="auto")
+                parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
+            
+            clf = GridSearchCV(svm, parameters, scoring='f1')
 
-        #lr = sklearn.linear_model.LogisticRegression(penalty="l2", class_weight="auto")
-        #lr = sklearn.svm.SVC(kernel="linear", class_weight="auto")
-        #lr = LinearSVC(loss='l2', class_weight="auto")
-        #parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
-        #clf = GridSearchCV(lr, parameters, scoring='f1')
+            clf.fit(X_train, y_train)
+            #print show_most_informative_features(vectorizer, clf.best_estimator_)
+            #pdb.set_trace()
+            preds = clf.predict(X_test)
 
-        #clf = svm
 
-        clf.fit(X_train, y_train)
-        #w = clf.best_estimator_.coef_[0]
-        #pdb.set_trace()
-        preds = clf.predict(X_test)
         ids_to_preds = dict(zip(test_ids, preds))
-        kappa = comment_level_computer_agreement_with_humans(ids_to_preds)
+        kappa = comment_level_computer_agreement_with_humans(ids_to_preds, verbose=verbose)
         avg_pw_kappas.append(kappa)
 
         tp, fp, tn, fn = 0,0,0,0
         N = len(preds)
         fn_comments, fp_comments = [], []
-        print N
+        if verbose:
+            print N
         for i in xrange(N):
             cur_id = test_ids[i]
             y_i = y_test[i]
@@ -1178,24 +1212,28 @@ def pretense_experiment(use_pretense=False, at_least=1):
 
        
         from sklearn.metrics import auc
-        #pdb.set_trace()
-        #probas = clf.predict_proba(X_test)
-        probas = clf.decision_function(X_test)
-        #probas = [x[1] for x in probas]
+        if not model=="baseline":
+            probas = clf.decision_function(X_test)
+            #probas = [x[1] for x in probas]
+        else:
+            probas = [random.random() for i in xrange(X_test.shape[0])]
+        
         prec, recall, thresholds = precision_recall_curve(y_test, probas)
         area = auc(recall, prec)
         AUCs.append(area)
-        
     
         #print show_most_informative_features(vectorizer, clf)
     #top_features.append(show_most_informative_features(vectorizer, clf))
-    #clf = SGDClassifier(loss="hinge", penalty="l2", alpha=.001, class_weight="auto",n_iter=5000)
-    clf = sklearn.linear_model.LogisticRegression(penalty="l2", class_weight="auto")
-    clf.fit(X, y)
-    #pdb.set_trace()
-    print show_most_informative_features(vectorizer, clf)
+    if verbose:
+        clf = SGDClassifier(loss="hinge", penalty="l2", alpha=.001, class_weight="auto",n_iter=5000)
+        #clf = sklearn.linear_model.LogisticRegression(penalty="l2", class_weight="auto")
+        clf.fit(X, y)
+        print show_most_informative_features(vectorizer, clf)
 
     avg = lambda x : sum(x)/float(len(x))
+    print "-"*10
+    print model
+    print "-"*10
     print "\nrecalls:"
     print recalls
     print "average: %s" % avg(recalls)
@@ -1216,8 +1254,7 @@ def pretense_experiment(use_pretense=False, at_least=1):
     print "\naverage kappas:"
     print avg_pw_kappas
     print "average average kappas: %s" % avg(avg_pw_kappas)
-    #pdb.set_trace()
-    #return recalls, precisions, Fs
+
 
 def add_punctuation_features(comment):
     # @TODO refactor -- obviously redundant with below! yuck
