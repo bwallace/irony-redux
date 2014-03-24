@@ -217,6 +217,7 @@ def computer_agreement_with_humans(segment_ids_to_preds):
         pairwise_kappas.append(pw_kappa)
     return sum(pairwise_kappas)/float(len(pairwise_kappas))
 
+
 def pairwise_kappa():
     pairwise_kappas = []
     for labeler_set in itertools.permutations(labelers_of_interest, 2):
@@ -232,20 +233,27 @@ def pairwise_kappa():
 
 # e.g., pairwise annotation task between "4" and "5" like so:
 # task, tuples, comments_to_lbls, comments_to_lblers = annotation_stats.agreement(these_labelers=set(["4","5"])
-def agreement(these_labelers=None):
+def agreement(these_labelers=None, comment_level=True):
     # select all segment labels
     cursor.execute(
         '''select comment_id, segment_id, labeler_id, label from irony_label 
             where forced_decision=0 and labeler_id in %s;''' % labeler_id_str)
     all_segments = cursor.fetchall()
 
+
     comments_to_labels = defaultdict(list)
     comments_to_labeler_ids = defaultdict(list)
     for seg in all_segments:
         comment_id, segment_id, labeler, label = seg
         labeler = str(labeler)
-        comments_to_labels[comment_id].append((labeler, str(segment_id), str(label)))
-        comments_to_labeler_ids[comment_id].append(labeler)
+
+        if comment_level:
+            comments_to_labels[comment_id].append((labeler, str(segment_id), str(label)))
+            comments_to_labeler_ids[comment_id].append(labeler)
+        else:
+            comments_to_labels[segment_id].append((labeler, str(segment_id), str(label)))
+            comments_to_labeler_ids[segment_id].append(labeler)
+
 
     comments_to_labeler_sets = {}
     for comment_id, labeler_list in comments_to_labeler_ids.items():
@@ -262,6 +270,7 @@ def agreement(these_labelers=None):
         labelers = comments_to_labeler_sets[comment_id]
         # @TODO not sure if this is how you want to deal with this, in general
         #if labelers == set([str(l) for l in labelers_of_interest]):
+        #pdb.set_trace()
         if these_labelers.issubset(labelers):
             comment_labels = comments_to_labels[comment_id]
             was_labeled_by = lambda a_label, a_labeler : a_label[0] == a_labeler
@@ -275,7 +284,7 @@ def agreement(these_labelers=None):
                 cur_tuple = (str(labeler), str(comment_id), str(labeler_aggregate_label))
                 tuples.append(cur_tuple)
 
-
+    #pdb.set_trace()
     task = nltk.AnnotationTask(data=tuples)
 
     #print "kappa is: {0}".format(task.kappa())
@@ -747,6 +756,12 @@ def get_all_sentences_from_subreddit(subreddit):
     return list(set(subreddit_sentences))
 
 
+def get_sentence_ids_for_comment(comment_id):
+    # syntactic sugar.
+    sentence_ids, subreddits = get_sentence_ids_for_comments([comment_id])
+    # all the subreddits are the same, of course, so just return the first.
+    return (sentence_ids, subreddits[0])
+
 def get_sentence_ids_for_comments(comment_ids):
     comments_ids_str = _make_sql_list_str(comment_ids)
 
@@ -804,11 +819,10 @@ def get_all_comments_from_subreddit(subreddit):
     return list(set(subreddit_comments))
 
 
-def sentence_classification(use_pretense=False):
-    print "-- sentence classification! ---"
-    # @TODO refactor -- this is redundant with code above!!!
-    # only keep the sentences for which we have 'final' comment 
-    # labels.
+def sentence_classification_i(add_interactions=True, model="SVC", verbose=False):
+    ''' interaction features '''
+    from sklearn.feature_extraction.text2 import InteractionTermCountVectorizer
+
     labeled_comment_ids = get_labeled_thrice_comments()
     conservative_comment_ids = list(set([c_id for c_id in 
             get_all_comments_from_subreddit("Conservative") if c_id in labeled_comment_ids]))
@@ -826,18 +840,133 @@ def sentence_classification(use_pretense=False):
     sentence_ids, sentence_texts, sentence_lbls = get_texts_and_labels_for_sentences(
         sentence_ids, repeat=False, collapse=collapse_f)
 
-    vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
-                                        max_features=20000, ngram_range=(1,2), 
-                                        stop_words="english")
-    X = vectorizer.fit_transform(sentence_texts)
+    if add_interactions:
+        vectorizer = InteractionTermCountVectorizer(ngram_range=(1,2), 
+                                        stop_words="english", binary=True)
+        # add interaction terms for liberals
+        interaction_indices = [s_i for s_i in xrange(len(sentence_ids)) 
+                                if subreddits[s_i] == "progressive"]
+        X = vectorizer.fit_transform(sentence_texts, interaction_prefix="progressive",
+                                    interaction_doc_indices=interaction_indices)
+
+    else:
+        vectorizer = CountVectorizer(ngram_range=(1,2), 
+                                        stop_words="english", binary=True)
+        X = vectorizer.fit_transform(sentence_texts)
+    #X = vectorizer.fit_transform(sentence_texts)
+    #pdb.set_trace()
+
     # @TODO!
     #y = [max(lbls) for lbls in sentence_lbls]
-    y = sentence_lbls
+    y = sentence_lbls      
+
+    kf = KFold(len(y), n_folds=5, shuffle=True, random_state=9)
+    recalls, precisions, Fs = [], [], []
+    kappas = []
+    #results = []
+    for train, test in kf:
+        #train_ids = _get_entries(all_comment_ids, train)
+        test_ids = _get_entries(sentence_ids, test)
+        y_train = _get_entries(y, train)
+        y_test = _get_entries(y, test)
+
+        X_train, X_test = X[train], X[test]
+        
+        clf = None
+        if model=="SGD":
+            print "SGD!!!"
+            svm = SGDClassifier(loss="hinge", penalty="l2", class_weight="auto")
+            parameters = {'alpha':[.0001, .001, .01, .1, 1, 10, 100]}
+            clf = GridSearchCV(svm, parameters, scoring='f1')
+        elif model == "SVC":
+            print "SVC!!!!"
+            svc = LinearSVC(loss="l2", penalty="l2", dual=False, class_weight="auto")
+            parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
+            clf = GridSearchCV(svc, parameters, scoring='f1')
+
+        clf.fit(X_train, y_train)
+        
+        preds = clf.predict(X_test)
+        if verbose:
+            print show_most_informative_features(vectorizer, clf.best_estimator_)
+
+        print sklearn.metrics.classification_report(y_test, preds)
+        
+        #pdb.set_trace()
+        prec, recall, f, support = sklearn.metrics.precision_recall_fscore_support(
+                                    y_test, preds)
+        recalls.append(recall)
+        precisions.append(prec)
+        Fs.append(f)
+
+        segments_to_preds = dict(zip(test_ids, preds))
+        kappa = computer_agreement_with_humans(segments_to_preds)
+        print "avg kappa: %s" % kappa
+        kappas.append(kappa)
+
+    avg = lambda l : sum(l)/float(len(l))
+    print "average F: %s \naverage recall: %s \naverage precision: %s " % (
+                avg(Fs), avg(recalls), avg(precisions))
+    print "average (average) kappa: %s\n" % avg(kappas)
+
+    return Fs, recalls, precisions, kappas
 
 
-    '''
-    Note -- this trains on comments, not sentences.
-    '''
+
+
+
+
+
+def sentence_classification(use_pretense=False, model="SVC", interaction_features=False, verbose=False):
+    print "-- sentence classification! ---"
+    # @TODO refactor -- this is redundant with code above!!!
+    # only keep the sentences for which we have 'final' comment 
+    # labels.
+    labeled_comment_ids = get_labeled_thrice_comments()
+    conservative_comment_ids = list(set([c_id for c_id in 
+            get_all_comments_from_subreddit("Conservative") if c_id in labeled_comment_ids]))
+
+    n_conservative_comments = len(conservative_comment_ids)
+    liberal_comment_ids = list(set([c_id for c_id in 
+                get_all_comments_from_subreddit("progressive") if c_id in labeled_comment_ids]))
+
+    all_comment_ids = conservative_comment_ids + liberal_comment_ids
+
+    sent_ids_to_subreddits = {}
+    comments_d = {} # point from comment_id to sentences, etc.
+    for comment_id in all_comment_ids:
+        comment_sentence_ids, comment_subreddit = get_sentence_ids_for_comment(comment_id)
+        comments_d[comment_id] = {"sentence_ids":comment_sentence_ids, 
+                                    "subreddit":comment_subreddit}
+        for sent_id in comment_sentence_ids:
+            sent_ids_to_subreddits[sent_id] = comment_subreddit
+
+        #sentence_ids.append(comment_sentence_ids)
+        #subreddits.append()
+
+    #all_sentence_ids = [comment["sentence_ids"] for comment in comments_d.values()]
+    all_sentence_ids = []
+    for comment in comments_d.values():
+        all_sentence_ids.extend(comment["sentence_ids"])
+
+    # ok now get text and labels
+    collapse_f = lambda lbl_set: 1 if lbl_set.count(1) >= 2 else -1
+
+    # perhaps return comment ids here
+    all_sentence_ids, sentence_texts, sentence_lbls = get_texts_and_labels_for_sentences(
+        all_sentence_ids, repeat=False, collapse=collapse_f)
+    sentence_ids_to_labels = dict(zip(all_sentence_ids, sentence_lbls))
+    sentence_ids_to_rows = dict(zip(all_sentence_ids, range(len(all_sentence_ids))))
+
+    vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
+                                        max_features=10000, ngram_range=(1,2), 
+                                        stop_words="english")
+    X = vectorizer.fit_transform(sentence_texts)
+
+    # @TODO!
+    #y = [max(lbls) for lbls in sentence_lbls]
+    #y = sentence_lbls
+
     predicted_probabilities_of_being_liberal = []
     if use_pretense:
         clf, vectorizer = sentence_liberal_conservative_model()#pretense(just_the_model=True)
@@ -854,46 +983,77 @@ def sentence_classification(use_pretense=False):
         conservative_j = X.shape[1] - 1
         liberal_j = X.shape[1] - 2
         for i in xrange(X.shape[0]):
-            sentence_id = sentence_ids[i]
+            sentence_id = all_sentence_ids[i]
             #if i < n_conservative_comments:
             if sent_ids_to_subreddits[sentence_id] == "Conservative":
-
                 X[i,conservative_j] = predicted_probabilities_of_being_liberal[i]
+                #pass
             else:
                 X[i, liberal_j-1] = 1.0 # 'liberal intercept'
                 X[i,liberal_j] = predicted_probabilities_of_being_liberal[i]
 
 
-    kf = KFold(len(y), n_folds=5, shuffle=True, random_state=31415)
+    #kf = KFold(len(y), n_folds=10, shuffle=True, random_state=1069)
+    # move the folds to the *comment* level
+    kf = KFold(len(all_comment_ids), n_folds=5, shuffle=True, random_state=1069)
+
     recalls, precisions, Fs = [], [], []
     kappas = []
     #results = []
+    ### TODO finish this! we'll move to shuffling comments and training
+    ### on their sentences
     for train, test in kf:
-        #train_ids = _get_entries(all_comment_ids, train)
-        test_ids = _get_entries(sentence_ids, test)
-        y_train = _get_entries(y, train)
-        y_test = _get_entries(y, test)
 
-        X_train, X_test = X[train], X[test]
+        train_comment_ids = _get_entries(all_comment_ids, train)
+        test_comment_ids = _get_entries(all_comment_ids, test)
+        train_rows, y_train = [], []
+        test_rows, y_test = [], []
+
+        for comment in train_comment_ids:
+            sentence_ids = comments_d[comment]["sentence_ids"]
+            train_rows.extend([sentence_ids_to_rows[sent_id] for sent_id in sentence_ids])
+            y_train.extend([sentence_ids_to_labels[sent_id] for sent_id in sentence_ids])
+
+        for comment in test_comment_ids:
+            sentence_ids = comments_d[comment]["sentence_ids"]
+            test_rows.extend([sentence_ids_to_rows[sent_id] for sent_id in sentence_ids])
+            y_test.extend([sentence_ids_to_labels[sent_id] for sent_id in sentence_ids])
+
+        #y_train = _get_entries(y, train)
+        #y_test = _get_entries(y, test)
+
+        X_train, X_test = X[train_rows], X[test_rows]
         
+        clf = None
+        if model=="SGD":
+            print "SGD!!!"
+            svm = SGDClassifier(loss="hinge", penalty="l2", class_weight="auto")
+            parameters = {'alpha':[.0001, .001, .01, .1, 1, 10, 100]}
+            clf = GridSearchCV(svm, parameters, scoring='f1')
+        elif model == "SVC":
+            print "SVC!!!!"
+            svc = LinearSVC(loss="l2", penalty="l2", dual=False, class_weight="auto")
+            parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
+            clf = GridSearchCV(svc, parameters, scoring='f1')
+        elif model=="baseline":
+            import random
+            # guess at chance
+            p_train = len([y_i for y_i in y_train if y_i > 0])/float(len(y_train))
+            def baseline_clf(): # no input!
+                if random.random() < p_train:
+                    return 1
+                return -1
+            clf = baseline_clf
 
-        ''' SGD '''
-        #print "SGD!!!"
-        #svm = SGDClassifier(loss="hinge", penalty="l2", class_weight="auto")
-        #parameters = {'alpha':[.0001, .001, .01, .1, 1, 10, 100]}
-        #clf = GridSearchCV(svm, parameters, scoring='f1')
-        
+        if not model=="baseline":
+            clf.fit(X_train, y_train)
+            preds = clf.predict(X_test)
+        else:
+            preds = [clf() for i in xrange(len(y_test))]
 
-        ''' SVC '''
-        print "SVC!!!!"
-        svc = LinearSVC(loss='l2', class_weight="auto")
-        parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
-        clf = GridSearchCV(svc, parameters, scoring='f1')
+        if verbose:
+            print show_most_informative_features(vectorizer, clf.best_estimator_)
 
-        clf.fit(X_train, y_train)
-        #pdb.set_trace()
-        preds = clf.predict(X_test)
-        print show_most_informative_features(vectorizer, clf.best_estimator_)
         print sklearn.metrics.classification_report(y_test, preds)
         
         #pdb.set_trace()
@@ -903,17 +1063,17 @@ def sentence_classification(use_pretense=False):
         precisions.append(prec)
         Fs.append(f)
 
-        segments_to_preds = dict(zip(test_ids, preds))
-        kappa = computer_agreement_with_humans(segments_to_preds)
-        print "avg kappa: %s" % kappa
-        kappas.append(kappa)
+        #segments_to_preds = dict(zip(test_ids, preds))
+        #kappa = computer_agreement_with_humans(segments_to_preds)
+        #print "avg kappa: %s" % kappa
+        #kappas.append(kappa)
 
     avg = lambda l : sum(l)/float(len(l))
-    print "average F: %s \naverage recall: %s \naverage precision: %s\n " % (
+    print "average F: %s \naverage recall: %s \naverage precision: %s " % (
                 avg(Fs), avg(recalls), avg(precisions))
-    print "average (average) kappa: %s\n" % avg(kappas)
+    #print "average (average) kappa: %s\n" % avg(kappas)
 
-    return Fs, recalls, precisions, kappas
+    return Fs, recalls, precisions#, kappas
 
 def sentence_liberal_conservative_model():
     conservative_comment_ids = get_all_comments_from_subreddit("Conservative")
@@ -1151,7 +1311,7 @@ def pretense_experiment(use_pretense=False, at_least=1, model="SGD",
                 svm = SGDClassifier(loss="hinge", penalty="l2", class_weight="auto", n_iter=2000)
                 parameters = {'alpha':[.0001, .001, .01, .1]}
             else:
-                svm = LinearSVC(loss='l2', class_weight="auto")
+                svm = LinearSVC(loss="l2", class_weight="auto")
                 parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
             
             clf = GridSearchCV(svm, parameters, scoring='f1')
