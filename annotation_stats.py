@@ -678,6 +678,15 @@ def get_NNPs_from_comment(comment):
         NNPs.extend([t[0] for t in pos_tags if t[1]=="NNP"])
     return NNPs
 
+# retreive NNP(S) words given a segment_id (id -> irony_comment_segment).
+def get_NNPs_from_segment(segment_id):
+    NNPs = []
+    cursor.execute('select tag from irony_commentsegment where id=%s' % segment_id)
+    tagged_sentence = cursor.fetchall()[0][0].encode('utf-8')
+    word_tag_tuples = [nltk.tag.str2tuple(t) for t in tagged_sentence.split()]
+    NNPs.extend(word_tag[0] for word_tag in word_tag_tuples if word_tag[1] == 'NNP' or word_tag[1] == 'NNPS')
+    return NNPs
+
 def get_all_NNPs():
     comments = get_labeled_thrice_comments()
     comments_str = _make_sql_list_str(comments)
@@ -1587,5 +1596,31 @@ def show_most_informative_features(vectorizer, clf, n=100):
         out_str.append("\t%.4f\t%-15s\t\t%.4f\t%-15s" % (c1,f1,c2,f2))
     return "\n".join(out_str)
 
+import operator
+def preliminary_test_with_NNPs():
+    cursor.execute('select segment_id from irony_label group by segment_id having count(labeler_id) >= 3')
+    ids = [t[0] for t in cursor.fetchall() if t[0] != None]
+    ironic = {}
+    unironic = {}
+    for id in ids:
+        NNPs = get_NNPs_from_segment(id)
+        if len(NNPs) != 0:
+            cursor.execute('select label from irony_label where segment_id=%s and labeler_id in %s' % (id, labeler_id_str))
+            if cursor.fetchall().count((1,)) >= 2:
+                for n in NNPs:
+                    if n not in ironic:
+                        ironic[n] = 0
+                    ironic[n] += 1
+            else:
+                for n in NNPs:
+                    if n not in unironic:
+                        unironic[n] = 0
+                    unironic[n] += 1
+    sorted_ironic = sorted(ironic.iteritems(), key=operator.itemgetter(1))
+    sorted_ironic.reverse()
+    print sorted_ironic[:20]
+    sorted_unironic = sorted(unironic.iteritems(), key=operator.itemgetter(1))
+    sorted_unironic.reverse()
+    print sorted_unironic[:20]
 
 
