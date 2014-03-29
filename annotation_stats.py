@@ -42,7 +42,8 @@ i.e., this is you use in the 'agreement' function
 ####
 # for ACL paper: "/Users/bwallace/dev/computational-irony/data-2-7/ironate.db"
 
-db_path = "/Users/bwallace/dev/computational-irony/data-3-12/ironate.db"
+#db_path = "/Users/bwallace/dev/computational-irony/data-3-12/ironate.db"
+db_path = "/home/dc65/Documents/research/irony/ironate.db"
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 ### we consider 4 active labelers
@@ -676,15 +677,6 @@ def get_NNPs_from_comment(comment):
         tokenized_sent = nltk.word_tokenize(sentence)
         pos_tags = nltk.pos_tag(tokenized_sent)
         NNPs.extend([t[0] for t in pos_tags if t[1]=="NNP"])
-    return NNPs
-
-# retreive NNP(S) words given a segment_id (id -> irony_comment_segment).
-def get_NNPs_from_segment(segment_id):
-    NNPs = []
-    cursor.execute('select tag from irony_commentsegment where id=%s' % segment_id)
-    tagged_sentence = cursor.fetchall()[0][0].encode('utf-8')
-    word_tag_tuples = [nltk.tag.str2tuple(t) for t in tagged_sentence.split()]
-    NNPs.extend(word_tag[0] for word_tag in word_tag_tuples if word_tag[1] == 'NNP' or word_tag[1] == 'NNPS')
     return NNPs
 
 def get_all_NNPs():
@@ -1596,6 +1588,20 @@ def show_most_informative_features(vectorizer, clf, n=100):
         out_str.append("\t%.4f\t%-15s\t\t%.4f\t%-15s" % (c1,f1,c2,f2))
     return "\n".join(out_str)
 
+################################################################################
+# retreive NNP(S) words given a segment_id (id -> irony_comment_segment).
+def get_NNPs_from_segment(segment_id):
+    NNPs = []
+    cursor.execute('select tag from irony_commentsegment where id=%s' % segment_id)
+    tagged_sentence = cursor.fetchall()[0][0].encode('utf-8')
+    word_tag_tuples = [nltk.tag.str2tuple(t) for t in tagged_sentence.split()]
+    NNPs.extend(word_tag[0] for word_tag in word_tag_tuples if word_tag[1] == 'NNP' or word_tag[1] == 'NNPS')
+    return NNPs
+
+def is_segment_ironic(segment_id, at_least=2):
+    cursor.execute('select label from irony_label where segment_id=%s and labeler_id in %s' % (segment_id, labeler_id_str))
+    return cursor.fetchall().count((1,)) >= 2
+
 import operator
 def preliminary_test_with_NNPs():
     cursor.execute('select segment_id from irony_label group by segment_id having count(labeler_id) >= 3')
@@ -1605,17 +1611,11 @@ def preliminary_test_with_NNPs():
     for id in ids:
         NNPs = get_NNPs_from_segment(id)
         if len(NNPs) != 0:
-            cursor.execute('select label from irony_label where segment_id=%s and labeler_id in %s' % (id, labeler_id_str))
-            if cursor.fetchall().count((1,)) >= 2:
-                for n in NNPs:
-                    if n not in ironic:
-                        ironic[n] = 0
-                    ironic[n] += 1
-            else:
-                for n in NNPs:
-                    if n not in unironic:
-                        unironic[n] = 0
-                    unironic[n] += 1
+            dict = ironic if is_segment_ironic(id) else unironic
+            for word in NNPs:
+                if word not in dict:
+                    dict[word] = 0
+                dict[word] += 1
     sorted_ironic = sorted(ironic.iteritems(), key=operator.itemgetter(1))
     sorted_ironic.reverse()
     print sorted_ironic[:20]
@@ -1623,4 +1623,211 @@ def preliminary_test_with_NNPs():
     sorted_unironic.reverse()
     print sorted_unironic[:20]
 
+def length_feature():
+    cursor.execute('select segment_id from irony_label group by segment_id having count(labeler_id) >= 3')
+    ids = [t[0] for t in cursor.fetchall() if t[0] != None]
+    ironic = {}
+    unironic = {}
+    for id in ids:
+        cursor.execute('select text from irony_commentsegment where id=%s' % id)
+        tmp = len(cursor.fetchall()[0][0].encode('utf-8').split())
+        dict = ironic if is_segment_ironic(id) else unironic
+        if tmp not in dict:
+            dict[tmp] = 0
+        dict[tmp] += 1
+    sorted_ironic = sorted(ironic.iteritems(), key=operator.itemgetter(1))
+    sorted_ironic.reverse()
+    print 'ironic'
+    print sorted_ironic[:20]
+    mean = 0.
+    denom = 0
+    for length, count in sorted_ironic:
+        mean += count * length
+        denom += count
+    print mean / denom
+        
+    sorted_unironic = sorted(unironic.iteritems(), key=operator.itemgetter(1))
+    sorted_unironic.reverse()
+    print sorted_unironic[:20]
+    mean = 0.
+    denom = 0
+    for length, count in sorted_unironic:
+        mean += count * length
+        denom += count
+    print mean / denom
 
+def get_labeled_thrice_segments():
+    cursor.execute('select segment_id from irony_label group by segment_id having count(labeler_id) >= 3')
+    thricely_labeled_segment_ids = _grab_single_element(cursor.fetchall())
+    # TODO: The original somehow contains None. Figure out why.
+    return thricely_labeled_segment_ids[1:]
+
+def get_texts_and_labels(segment_ids):
+    texts = []
+    labels = []
+    for segment_id in segment_ids:
+        cursor.execute('select text from irony_commentsegment where id=%s' % segment_id)
+        texts.append(cursor.fetchall()[0][0].encode('utf-8'))
+        if is_segment_ironic(segment_id):
+            labels.append(1)
+        else:
+            labels.append(-1)
+        
+    return texts, labels
+
+def experiment(model="SGD", verbose=False):
+    labeled_segment_ids = get_labeled_thrice_segments()
+    segment_texts, y = get_texts_and_labels(labeled_segment_ids)
+
+    vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
+                                        max_features=10000, ngram_range=(1,2), 
+                                        stop_words="english")
+    X = vectorizer.fit_transform(segment_texts)
+    
+    x0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
+    X = scipy.sparse.hstack((X, x0)).tocsr()
+    
+    #pdb.set_trace()
+    kf = KFold(len(y), n_folds=5, shuffle=True, random_state=5)
+    recalls, precisions, Fs, AUCs = [], [], [], []
+    avg_pw_kappas = []
+    test_comments = []
+
+    for train, test in kf:
+        train_ids = _get_entries(labeled_segment_ids, train)
+        test_ids = _get_entries(labeled_segment_ids, test)
+        y_train = _get_entries(y, train)
+        y_test = _get_entries(y, test)
+
+        p_train = (y_train.count(1))/float(len(y_train))
+        if verbose:
+            print "p train: %s" % p_train
+            print "p test: %s" % (y_test.count(1)/float(len(y_test)))
+
+        if model=="baseline":
+            import random
+            # guess at chance
+            def baseline_clf(): # no input!
+                if random.random() < p_train:
+                    return 1
+                return -1
+
+        test_comment_texts = _get_entries(segment_texts, test)
+        test_comments.append(test_comment_texts)
+
+        #pdb.set_trace()
+        X_train, X_test = X[train], X[test]
+        
+
+        clf, preds = None, None
+        if model=="baseline":
+            preds = [baseline_clf() for i in xrange(X_test.shape[0])]
+        else:
+            svm = None
+            if model=="SGD":
+                svm = SGDClassifier(loss="hinge", penalty="l2", class_weight="auto", n_iter=2000)
+                parameters = {'alpha':[.0001, .001, .01, .1]}
+            else:
+                svm = LinearSVC(loss="l2", class_weight="auto")
+                parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
+            
+            clf = GridSearchCV(svm, parameters, scoring='f1')
+
+            clf.fit(X_train, y_train)
+            #print show_most_informative_features(vectorizer, clf.best_estimator_)
+            #pdb.set_trace()
+            preds = clf.predict(X_test)
+
+
+        ids_to_preds = dict(zip(test_ids, preds))
+        kappa = comment_level_computer_agreement_with_humans(ids_to_preds, verbose=verbose)
+        avg_pw_kappas.append(kappa)
+
+        tp, fp, tn, fn = 0,0,0,0
+        N = len(preds)
+        fn_comments, fp_comments = [], []
+        if verbose:
+            print N
+        for i in xrange(N):
+            cur_id = test_ids[i]
+            y_i = y_test[i]
+            pred_y_i = preds[i]
+
+            if y_i == 1:
+                # ironic
+                if pred_y_i == 1:
+                    tp += 1 
+                else:
+                    fn += 1
+                    fn_comments.append(test_comment_texts[i])
+            else:
+                # unironic
+                if pred_y_i == -1:
+                    tn += 1
+                else:
+                    #pdb.set_trace()
+                    fp += 1
+                    fp_comments.append(test_comment_texts[i])
+
+        
+        recall = tp/float(tp + fn)
+        try:
+            precision = tp/float(tp + fp)
+        except:
+            print "precision undefined!"
+            precision = 0.0
+        recalls.append(recall)
+        precisions.append(precision)
+
+        try:
+            f1 = 2* (precision * recall) / (precision + recall)
+        except:
+            print "f1 undefined!"
+            f1 = 0.0
+        Fs.append(f1)
+        
+
+       
+        from sklearn.metrics import auc
+        if not model=="baseline":
+            probas = clf.decision_function(X_test)
+            #probas = [x[1] for x in probas]
+        else:
+            probas = [random.random() for i in xrange(X_test.shape[0])]
+        
+        prec, recall, thresholds = precision_recall_curve(y_test, probas)
+        area = auc(recall, prec)
+        AUCs.append(area)
+    
+        #print show_most_informative_features(vectorizer, clf)
+    #top_features.append(show_most_informative_features(vectorizer, clf))
+    if verbose:
+        clf = SGDClassifier(loss="hinge", penalty="l2", alpha=.001, class_weight="auto",n_iter=5000)
+        #clf = sklearn.linear_model.LogisticRegression(penalty="l2", class_weight="auto")
+        clf.fit(X, y)
+        print show_most_informative_features(vectorizer, clf)
+
+    avg = lambda x : sum(x)/float(len(x))
+    print "-"*10
+    print model
+    print "-"*10
+    print "\nrecalls:"
+    print recalls
+    print "average: %s" % avg(recalls)
+
+    print "\nprecisions:"
+    print precisions
+    print "average: %s" % avg(precisions)
+
+    print "\nF1s:"
+    print Fs   
+    print "average: %s" % avg(Fs)
+
+    
+    print "\nAUCs:"
+    print AUCs
+    print "average: %s" % avg(AUCs)
+    
+    print "\naverage kappas:"
+    print avg_pw_kappas
+    print "average average kappas: %s" % avg(avg_pw_kappas)
