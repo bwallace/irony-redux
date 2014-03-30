@@ -1684,14 +1684,20 @@ def experiment(model="SGD", verbose=False):
                                         stop_words="english")
     X = vectorizer.fit_transform(segment_texts)
     
-    x0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
-    X = scipy.sparse.hstack((X, x0)).tocsr()
+    # x0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 1)))
+    # X = scipy.sparse.hstack((X, x0)).tocsr()
     
     #pdb.set_trace()
     kf = KFold(len(y), n_folds=5, shuffle=True, random_state=5)
     recalls, precisions, Fs, AUCs = [], [], [], []
     avg_pw_kappas = []
     test_comments = []
+
+    # for i in xrange(X.shape[0]):
+    #     last = X.shape[1] - 1
+    #     X[i, last] = len(segment_texts[i])# length of the texts
+    #     NNPs = get_NNPs_from_segment(labeled_segment_ids[i])
+    #     X[i, last] = 1 if len(NNPs) > 0 else -1 # 1 if segment contains NNPs 
 
     for train, test in kf:
         train_ids = _get_entries(labeled_segment_ids, train)
