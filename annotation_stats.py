@@ -1052,7 +1052,6 @@ def sentence_classification(use_pretense=False, model="SVC",
                 if tag == "NNP":
                     sentence_NNP_tokens.append(word)
             all_sentence_NNP_tokens.append(sentence_NNP_tokens)
-        pdb.set_trace()
 
         progressive_indices = [s_i for s_i in xrange(len(all_sentence_ids))
                                 if sent_ids_to_subreddits[all_sentence_ids[s_i]] == "progressive"]
