@@ -10,6 +10,12 @@ import nltk # for metrics
 
 import sklearn
 from sklearn.feature_extraction.text import CountVectorizer
+# note that this is local and will break for other people!
+try:
+    from sklearn.feature_extraction.text2 import InteractionTermCountVectorizer
+except:
+    print "InteractionTermCountVectorizer not found!"
+
 from sklearn.cross_validation import KFold
 from sklearn.grid_search import GridSearchCV
 from sklearn.svm import SVC
@@ -42,7 +48,7 @@ i.e., this is you use in the 'agreement' function
 ####
 # for ACL paper: "/Users/bwallace/dev/computational-irony/data-2-7/ironate.db"
 
-db_path = "/Users/bwallace/dev/computational-irony/data-3-12/ironate.db"
+db_path = "/Users/bwallace/dev/computational-irony/irony-redux/ironate-dk.db"
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 ### we consider 4 active labelers
@@ -79,6 +85,30 @@ def disagreed_upon():
         if not _all_same(lbls):
             disagreement_ids.append(id_)
     return disagreement_ids, comments_to_lbls
+
+
+import csv
+def comments_to_disk(outpath="for-ben.txt"):
+    labeled_comment_ids = get_labeled_thrice_comments()
+    sentence_ids, subreddits = get_sentence_ids_for_comments(labeled_comment_ids)
+
+    collapse_f = lambda lbl_set: 1 if lbl_set.count(1) >= 2 else -1
+    sentence_ids, sentence_texts, sentence_lbls = get_texts_and_labels_for_sentences(
+        sentence_ids, repeat=False, collapse=collapse_f, add_punctuation_features_to_text=False)
+
+    pdb.set_trace()
+    #out_str = ["id\tlabel\ttext"]
+    sentence_texts = [s.replace("\n", " ") for s in sentence_texts]
+    with open(outpath, 'w') as out_file:
+        out_f = csv.writer(out_file, delimiter="\t")
+        out_f.writerow(["id", "label", "text"])
+        for sent_id, sent_text, sent_lbl in zip(sentence_ids, sentence_texts, sentence_lbls):
+            #out_str.append("\t".join([str(sent_id), str(sent_lbl), "'%s'" % sent_text.encode('utf-8', errors="ignore")]))
+            out_f.writerow([str(sent_id), str(sent_lbl), sent_text.encode('utf-8', errors="ignore")])
+    
+    #with open(outpath, 'w') as out_file:
+        #comment.encode('utf-8')
+     #   out_file.write("\n".join(out_str))
 
 def uniform_irony_to_disk(fout="uniformly_ironic.txt"):
     irony_ids, comments_to_lbls = uniform_irony()
@@ -131,7 +161,7 @@ def get_labeled_thrice_comments():
     )
 
     thricely_labeled_comment_ids = _grab_single_element(cursor.fetchall())
-
+    print "%s comments have been labeled by >= 3 people" % len(thricely_labeled_comment_ids)
     return thricely_labeled_comment_ids
 
 def descriptive_stats():
@@ -502,6 +532,13 @@ def n_users_labeled_as_irony(comment_id):
             (comment_id, labeler_id_str)))
     return ironic_lblers
 
+def get_urls(comment_ids):
+    ids_str = _make_sql_list_str(comment_ids)
+    comment_urls = cursor.execute(
+                '''select id, thread_url, permalink, subreddit from irony_comment where id in %s;''' % 
+                ids_str).fetchall()
+    return comment_urls
+
 def get_forced_comments():
     # pre-context / forced decisions
     forced_decisions = _grab_single_element(cursor.execute(
@@ -746,6 +783,7 @@ def _get_subreddits(comment_ids):
         srs.append(sr[0])
     return srs
 
+
 def get_all_sentences_from_subreddit(subreddit):
     cursor.execute(
         '''select distinct segment_id from irony_label where 
@@ -777,7 +815,15 @@ def get_sentence_ids_for_comments(comment_ids):
 
     return (sentence_ids, subreddits)
 
-def get_texts_and_labels_for_sentences(sentence_ids, repeat=False, collapse=max):
+def get_parses(sentence_ids):
+    parse_tags = []
+    for id_ in sentence_ids:
+        parse_tags.append(cursor.execute(
+            '''select tag from irony_commentsegment where id=%s;''' % id_).fetchall()[0][0])
+    return parse_tags
+
+def get_texts_and_labels_for_sentences(sentence_ids, repeat=False, collapse=max, 
+                                        add_punctuation_features_to_text=True):
 
     # this is naive...
     sentence_texts, sentence_lbls = [], []
@@ -786,7 +832,8 @@ def get_texts_and_labels_for_sentences(sentence_ids, repeat=False, collapse=max)
         sentence_text = cursor.execute(
                     '''select text from irony_commentsegment where id=%s;''' % id_).fetchall()[0][0]
 
-        sentence_text = add_punctuation_features(sentence_text)
+        if add_punctuation_features_to_text:
+            sentence_text = add_punctuation_features(sentence_text)
         if not repeat:
             sentence_texts.append(sentence_text)
             new_sentence_ids.append(id_)
@@ -821,7 +868,6 @@ def get_all_comments_from_subreddit(subreddit):
 
 def sentence_classification_i(add_interactions=True, model="SVC", verbose=False):
     ''' interaction features '''
-    from sklearn.feature_extraction.text2 import InteractionTermCountVectorizer
 
     labeled_comment_ids = get_labeled_thrice_comments()
     conservative_comment_ids = list(set([c_id for c_id in 
@@ -846,8 +892,11 @@ def sentence_classification_i(add_interactions=True, model="SVC", verbose=False)
         # add interaction terms for liberals
         interaction_indices = [s_i for s_i in xrange(len(sentence_ids)) 
                                 if subreddits[s_i] == "progressive"]
-        X = vectorizer.fit_transform(sentence_texts, interaction_prefix="progressive",
-                                    interaction_doc_indices=interaction_indices)
+
+        X = vectorizer.fit_transform(sentence_texts, interaction_prefixes=["progressive"],
+                                    interaction_doc_indices=[interaction_indices])
+
+
 
     else:
         vectorizer = CountVectorizer(ngram_range=(1,2), 
@@ -913,11 +962,28 @@ def sentence_classification_i(add_interactions=True, model="SVC", verbose=False)
 
 
 
+class InterpolatedClassifier:
+    def __init__(clf0, clf1, lambda_ =.5):
+        self.clf0 = clf0
+        self.clf1 = clf1
+        self.lambda_ = lambda_
+
+    def fit(self, X, y):
+        self.clf0.fit(X,y)
+        self.clf1.fit(X,y)
+
+    def _predict(self, x):
+        raw_pred = lambda_ * clf0.predict_proba(x) +\
+                        (1-lambda_) * clf1.predict_proba(x)
+        return raw_pred > .5
 
 
 
 
-def sentence_classification(use_pretense=False, model="SVC", interaction_features=False, verbose=False):
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn import cross_validation
+def sentence_classification(use_pretense=False, model="SVC", 
+                            add_interactions=False, verbose=False, tfidf=True):
     print "-- sentence classification! ---"
     # @TODO refactor -- this is redundant with code above!!!
     # only keep the sentences for which we have 'final' comment 
@@ -931,7 +997,8 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
                 get_all_comments_from_subreddit("progressive") if c_id in labeled_comment_ids]))
 
     all_comment_ids = conservative_comment_ids + liberal_comment_ids
-
+    #all_comment_ids = labeled_comment_ids
+    print "%s political comments are labeled thrice" % len(all_comment_ids)
     sent_ids_to_subreddits = {}
     comments_d = {} # point from comment_id to sentences, etc.
     for comment_id in all_comment_ids:
@@ -955,13 +1022,62 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
     # perhaps return comment ids here
     all_sentence_ids, sentence_texts, sentence_lbls = get_texts_and_labels_for_sentences(
         all_sentence_ids, repeat=False, collapse=collapse_f)
+
+    sentence_ids_to_parses = dict(zip(all_sentence_ids, get_parses(all_sentence_ids)))
     sentence_ids_to_labels = dict(zip(all_sentence_ids, sentence_lbls))
     sentence_ids_to_rows = dict(zip(all_sentence_ids, range(len(all_sentence_ids))))
 
-    vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
-                                        max_features=10000, ngram_range=(1,2), 
-                                        stop_words="english")
-    X = vectorizer.fit_transform(sentence_texts)
+
+    if add_interactions:
+        vectorizer = InteractionTermCountVectorizer(ngram_range=(1,2), 
+                                        stop_words="english", binary=False, max_features=50000)
+        # add interaction terms for liberals
+        
+        #pdb.set_trace()
+        #interaction_indices = progressive_sentence_indices
+        #X = vectorizer.fit_transform(sentence_texts, interaction_prefix="progressive",
+        #                            interaction_doc_indices=interaction_indices)
+        
+        all_sentence_NNP_tokens = []
+        for s_i in  xrange(len(all_sentence_ids)):
+            sentence_NNP_tokens = []
+            sentence_id = all_sentence_ids[s_i]
+            parse = sentence_ids_to_parses[sentence_id]
+            for tok in parse.split(" "):
+                try:
+                    word, tag = tok.split("/")[-2:]
+                except:
+                    pdb.set_trace()
+                if tag == "NNP":
+                    sentence_NNP_tokens.append(word)
+            all_sentence_NNP_tokens.append(sentence_NNP_tokens)
+        pdb.set_trace()
+
+        progressive_indices = [s_i for s_i in xrange(len(all_sentence_ids))
+                                if sent_ids_to_subreddits[all_sentence_ids[s_i]] == "progressive"]
+        conservative_indices = [s_i for s_i in xrange(len(all_sentence_ids)) if s_i 
+                                    not in progressive_indices]
+
+        #X = vectorizer.fit_transform(sentence_texts, interaction_prefixes=["progressive", "conservative"],
+        #                            interaction_doc_indices=[progressive_indices, conservative_indices])
+        X = vectorizer.fit_transform(sentence_texts, interaction_prefixes=["progressive"],
+                                    interaction_doc_indices=[progressive_indices])
+
+
+        #sentence_NNPs = get_NNPs_from_comment(sentence_texts)
+    else:
+        vectorizer = CountVectorizer(ngram_range=(1,2), 
+                                        stop_words="english", binary=False, max_features=50000)
+        X = vectorizer.fit_transform(sentence_texts)
+    
+    if tfidf:
+        transformer = TfidfTransformer()
+        X = transformer.fit_transform(X)
+
+    #vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
+    #                                    max_features=10000, ngram_range=(1,2), 
+    #                                    stop_words="english")
+    #X = vectorizer.fit_transform(sentence_texts)
 
     # @TODO!
     #y = [max(lbls) for lbls in sentence_lbls]
@@ -977,31 +1093,34 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
             predicted_probabilities_of_being_liberal.append(p_i)
 
         ####
-        x0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
-        X = scipy.sparse.hstack((X, x0)).tocsr()
-    
-        conservative_j = X.shape[1] - 1
-        liberal_j = X.shape[1] - 2
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
+        #X = scipy.sparse.hstack((X, x0)).tocsr()
+        
+
+        #scalar = .001    
+        conservative_j = 2
+        liberal_j = 1
+        #conservative_j = X.shape[1] - 1
+        #liberal_j = X.shape[1] - 2
+        scalar = 1.0
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
-            #if i < n_conservative_comments:
+
             if sent_ids_to_subreddits[sentence_id] == "Conservative":
-                X[i,conservative_j] = predicted_probabilities_of_being_liberal[i]
-                #pass
+                X0[i,conservative_j] = scalar*predicted_probabilities_of_being_liberal[i]
+
             else:
-                X[i, liberal_j-1] = 1.0 # 'liberal intercept'
-                X[i,liberal_j] = predicted_probabilities_of_being_liberal[i]
+                X0[i, liberal_j-1] = scalar*1.0 # 'liberal intercept'
+                X0[i,liberal_j] = scalar*(1-predicted_probabilities_of_being_liberal[i])
 
 
-    #kf = KFold(len(y), n_folds=10, shuffle=True, random_state=1069)
     # move the folds to the *comment* level
     kf = KFold(len(all_comment_ids), n_folds=5, shuffle=True, random_state=1069)
 
     recalls, precisions, Fs = [], [], []
-    kappas = []
+    AUCs = []
+    #kappas = []
     #results = []
-    ### TODO finish this! we'll move to shuffling comments and training
-    ### on their sentences
     for train, test in kf:
 
         train_comment_ids = _get_entries(all_comment_ids, train)
@@ -1019,11 +1138,12 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
             test_rows.extend([sentence_ids_to_rows[sent_id] for sent_id in sentence_ids])
             y_test.extend([sentence_ids_to_labels[sent_id] for sent_id in sentence_ids])
 
-        #y_train = _get_entries(y, train)
-        #y_test = _get_entries(y, test)
-
         X_train, X_test = X[train_rows], X[test_rows]
-        
+        if use_pretense:
+            # pretense!
+            X0_train, X0_test = X0[train_rows], X0[test_rows]
+
+
         clf = None
         if model=="SGD":
             print "SGD!!!"
@@ -1032,9 +1152,17 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
             clf = GridSearchCV(svm, parameters, scoring='f1')
         elif model == "SVC":
             print "SVC!!!!"
+            # was LinearSVC
             svc = LinearSVC(loss="l2", penalty="l2", dual=False, class_weight="auto")
-            parameters = {'C':[ .001, .01,  .1, 1, 10, 100]}
+            #svc = SVC(kernel="linear", class_weight="auto", probability=True)
+            parameters = {'C':[ .0001, .001, .01,  .1, 1, 10, 100]}
             clf = GridSearchCV(svc, parameters, scoring='f1')
+            if use_pretense:
+                #svm0 = LinearSVC(loss="hinge", penalty="l2", class_weight="auto", probability=True)
+                svm0 = LinearSVC(loss="l2", penalty="l2", dual=False, class_weight="auto")
+                parameters0 = {'C':[ .0001, .001, .01,  .1, 1, 10, 100]}
+                clf0 = GridSearchCV(svm0, parameters0, scoring='f1')
+
         elif model=="baseline":
             import random
             # guess at chance
@@ -1045,9 +1173,72 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
                 return -1
             clf = baseline_clf
 
+        sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
         if not model=="baseline":
-            clf.fit(X_train, y_train)
-            preds = clf.predict(X_test)
+            if use_pretense:
+
+                ####
+                # OBVIOUSLY NEEDS TO BE REFACTORED
+                kf_lambda = KFold(X_train.shape[0], n_folds=5, shuffle=True, random_state=5)
+
+                # now try to balance predictions?
+                _lambdas = np.linspace(.9,1,20)
+                best_lambda, best_f1 = _lambdas[0], -1
+
+                norm = lambda v: v / max(v)
+                for _lambda in _lambdas:
+                    cur_lambda_scores = []
+
+                    for lambda_train, lambda_test in kf_lambda:
+                        y_train_lambda = [y_train[j] for j in lambda_train]
+                        clf0.fit(X0_train[lambda_train], y_train_lambda)
+                        clf.fit(X_train[lambda_train], y_train_lambda)
+
+                        def _clf(X, X0):
+                            #pdb.set_trace()
+                            fs, fs0 = clf.decision_function(X), clf0.decision_function(X0)
+                            fs = norm(fs)
+                            fs0 = norm(fs0)
+
+                            #pdb.set_trace()
+                            return sgn(_lambda *  fs + 
+                                     (1-_lambda) * fs0)
+
+
+                        lambda_preds = _clf(X_train[lambda_test], X0_train[lambda_test])
+                        y_test_lambda = [y_train[j] for j in lambda_test]
+                        #pdb.set_trace()
+                        lambda_f1 = sklearn.metrics.f1_score(y_test_lambda, lambda_preds)
+                        cur_lambda_scores.append(lambda_f1)
+
+                    avg_lambda_f1 = sum(cur_lambda_scores)/float(len(cur_lambda_scores))
+                    print "avg f1 for lambda %s: %s" % (_lambda, avg_lambda_f1)
+                    if avg_lambda_f1 > best_f1:
+                        print "best f1 found! lambda=%s, f1=%s" % (_lambda, avg_lambda_f1)
+                        best_f1 = avg_lambda_f1
+                        best_lambda = _lambda
+                clf.fit(X_train, y_train)
+                clf0.fit(X0_train, y_train)
+      
+            else:
+                clf.fit(X_train, y_train)
+            #pdb.set_trace()
+
+            if use_pretense:
+                def _clf(X, X0, binary=True):
+                    fs, fs0 = clf.decision_function(X), clf0.decision_function(X0)
+                    fs = norm(fs)
+                    fs0 = norm(fs0)
+                    decision_val = best_lambda * fs + (
+                                        1-best_lambda) * fs0
+                    if binary:
+                        return sgn(decision_val)
+                    return decision_val
+
+                preds = _clf(X_test, X0_test)
+    
+            else:
+                preds = sgn(clf.decision_function(X_test))
         else:
             preds = [clf() for i in xrange(len(y_test))]
 
@@ -1058,10 +1249,27 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
         
         #pdb.set_trace()
         prec, recall, f, support = sklearn.metrics.precision_recall_fscore_support(
-                                    y_test, preds)
+                                    y_test, preds, beta=1)
         recalls.append(recall)
         precisions.append(prec)
         Fs.append(f)
+
+        from sklearn.metrics import auc
+        if not model=="baseline":
+            #probas = clf.predict_proba(X_test)[:,1]
+            if use_pretense:
+                probas = _clf(X_test, X0_test, binary=False)
+            else:
+                probas = clf.decision_function(X_test)
+            #probas = [x[1] for x in probas]
+        else:
+            probas = [random.random() for i in xrange(X_test.shape[0])]
+        
+        #pdb.set_trace()
+        prec, recall, thresholds = precision_recall_curve(y_test, probas)
+        area = auc(recall, prec)
+        AUCs.append(area)
+        print "\nAUC: %s" % area
 
         #segments_to_preds = dict(zip(test_ids, preds))
         #kappa = computer_agreement_with_humans(segments_to_preds)
@@ -1072,7 +1280,7 @@ def sentence_classification(use_pretense=False, model="SVC", interaction_feature
     print "average F: %s \naverage recall: %s \naverage precision: %s " % (
                 avg(Fs), avg(recalls), avg(precisions))
     #print "average (average) kappa: %s\n" % avg(kappas)
-
+    print "average AUC: %s" % avg(AUCs)
     return Fs, recalls, precisions#, kappas
 
 def sentence_liberal_conservative_model():
