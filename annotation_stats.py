@@ -11,6 +11,9 @@ import nltk # for metrics
 import sklearn
 from sklearn.feature_extraction.text import CountVectorizer
 # note that this is local and will break for other people!
+###
+# /Library/Frameworks/Python.framework/Versions/7.3/lib/python2.7/site-packages/sklearn/feature_extraction/text2.py
+#
 try:
     from sklearn.feature_extraction.text2 import InteractionTermCountVectorizer
 except:
@@ -36,6 +39,8 @@ import statsmodels.api as sm
 
 import search_reddit
 
+import configparser # easy_install configparser
+
 '''
 general @TODO you need to decide how to deal with comments 
 labeled by different annotators! right now you are limiting
@@ -44,11 +49,15 @@ i.e., this is you use in the 'agreement' function
 '''
 
 #db_path = "/Users/bwallace/dev/computational-irony/data-11-30/ironate.db"
+config = configparser.ConfigParser()
+config.read("irony.ini")
+db_path = config["Paths"]["DB_PATH"]
+print "database path: %s" % db_path
 
 ####
 # for ACL paper: "/Users/bwallace/dev/computational-irony/data-2-7/ironate.db"
 
-db_path = "/Users/bwallace/dev/computational-irony/irony-redux/ironate-dk.db"
+#db_path = "/Users/bwallace/dev/computational-irony/irony-redux/ironate-dk2.db"
 
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
@@ -716,7 +725,7 @@ def get_NNPs_from_comment(comment):
         NNPs.extend([t[0] for t in pos_tags if t[1]=="NNP"])
     return NNPs
 
-def get_all_NNPs():
+def get_all_NNPs(sentiment_too=False):
     comments = get_labeled_thrice_comments()
     comments_str = _make_sql_list_str(comments)
     comments_and_redditors = list(cursor.execute(
@@ -815,6 +824,13 @@ def get_sentence_ids_for_comments(comment_ids):
         subreddits.append(segment[1])
 
     return (sentence_ids, subreddits)
+
+def get_sentiments(sentence_ids):
+    sentiments = []
+    for id_ in sentence_ids:
+        sentiments.append(cursor.execute(
+            '''select sentiment from irony_commentsegment where id=%s;''' % id_).fetchall()[0][0])
+    return sentiments
 
 def get_parses(sentence_ids):
     parse_tags = []
@@ -979,12 +995,65 @@ class InterpolatedClassifier:
         return raw_pred > .5
 
 
+def _get_NNP_tokens(all_sentence_ids, sentence_ids_to_parses, combine_adjacent=True):
+    all_sentence_NNP_tokens = []
+    for s_i in xrange(len(all_sentence_ids)):
+        sentence_NNP_tokens = []
+        sentence_id = all_sentence_ids[s_i]
+        parse = sentence_ids_to_parses[sentence_id]
+        prev_tag = None # catch adjacent tags
+        cur_word = None
+        for tok in parse.split(" "):
+            try:
+                word, tag = tok.split("/")[-2:]
+            except:
+                pdb.set_trace()
 
+            if tag == "NNP":
+                if not combine_adjacent:
+                    sentence_NNP_tokens.append(word)
+                else:
+                    if cur_word is not None:
+                        cur_word = cur_word + " " + word
+                    else:
+                        cur_word = word
+            elif combine_adjacent and cur_word is not None:
+                sentence_NNP_tokens.append(cur_word)
+                cur_word = None
+
+                
+        all_sentence_NNP_tokens.append(sentence_NNP_tokens)
+    #pdb.set_trace()
+    return dict(zip(all_sentence_ids, all_sentence_NNP_tokens))
+
+
+def observed_sentiment(nnp_token, subreddit="progressive", sentence_ids=None,
+                        sentence_ids_to_NNPs=None, sentence_ids_to_sentiments=None):   
+
+    comment_ids = None
+    # subreddit should be either "Conservative" or "progressive"
+    if subreddit == "progressive":
+        comment_ids = get_all_comments_from_subreddit("progressive")
+    else:
+        comment_ids = get_all_comments_from_subreddit("Conservative")
+    
+
+    if sentence_ids is None:
+        sentence_ids, subreddits = get_sentence_ids_for_comments(comment_ids)
+        sentence_ids_to_parses = dict(zip(sentence_ids, get_parses(sentence_ids)))
+        sentence_ids_to_NNPs = _get_NNP_tokens(sentence_ids, sentence_ids_to_parses)
+        sentence_ids_to_sentiments = dict(zip(sentence_ids, get_sentiments(sentence_ids)))
+
+    NNP_mentions = [id_ for id_ in sentence_ids if nnp_token in sentence_ids_to_NNPs[id_]]
+    polarities = [sentence_ids_to_sentiments[id_] for id_ in NNP_mentions]
+    if len(polarities) == 0:
+        return 0, 0
+    return sum(polarities)/float(len(polarities)), len(polarities)
 
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import cross_validation
 def sentence_classification(use_pretense=False, model="SVC", 
-                            add_interactions=False, verbose=False, tfidf=True):
+                            add_interactions=False, verbose=False, tfidf=True, n_folds=5, seed=30):
     print "-- sentence classification! ---"
     # @TODO refactor -- this is redundant with code above!!!
     # only keep the sentences for which we have 'final' comment 
@@ -1025,9 +1094,9 @@ def sentence_classification(use_pretense=False, model="SVC",
         all_sentence_ids, repeat=False, collapse=collapse_f)
 
     sentence_ids_to_parses = dict(zip(all_sentence_ids, get_parses(all_sentence_ids)))
+    sentence_ids_to_sentiments = dict(zip(all_sentence_ids, get_sentiments(all_sentence_ids)))
     sentence_ids_to_labels = dict(zip(all_sentence_ids, sentence_lbls))
     sentence_ids_to_rows = dict(zip(all_sentence_ids, range(len(all_sentence_ids))))
-
 
     if add_interactions:
         vectorizer = InteractionTermCountVectorizer(ngram_range=(1,2), 
@@ -1039,31 +1108,81 @@ def sentence_classification(use_pretense=False, model="SVC",
         #X = vectorizer.fit_transform(sentence_texts, interaction_prefix="progressive",
         #                            interaction_doc_indices=interaction_indices)
         
-        all_sentence_NNP_tokens = []
-        for s_i in  xrange(len(all_sentence_ids)):
-            sentence_NNP_tokens = []
-            sentence_id = all_sentence_ids[s_i]
-            parse = sentence_ids_to_parses[sentence_id]
-            for tok in parse.split(" "):
-                try:
-                    word, tag = tok.split("/")[-2:]
-                except:
-                    pdb.set_trace()
-                if tag == "NNP":
-                    sentence_NNP_tokens.append(word)
-            all_sentence_NNP_tokens.append(sentence_NNP_tokens)
-
+        #sentence_ids_to_NNP_tokens = _get_NNP_tokens(all_sentence_ids, sentence_ids_to_parses, 
+        #                                        combine_adjacent=False)
         progressive_indices = [s_i for s_i in xrange(len(all_sentence_ids))
                                 if sent_ids_to_subreddits[all_sentence_ids[s_i]] == "progressive"]
         conservative_indices = [s_i for s_i in xrange(len(all_sentence_ids)) if s_i 
                                     not in progressive_indices]
+        
+        observed_minus_expected = {}
 
-        #X = vectorizer.fit_transform(sentence_texts, interaction_prefixes=["progressive", "conservative"],
-        #                            interaction_doc_indices=[progressive_indices, conservative_indices])
-        X = vectorizer.fit_transform(sentence_texts, interaction_prefixes=["progressive"],
-                                    interaction_doc_indices=[progressive_indices])
+    
+        prog_sentence_ids, cons_sentence_ids = [], []
+        for id_, subreddit in sent_ids_to_subreddits.items():
+            if subreddit == "progressive":
+                prog_sentence_ids.append(id_)
+            else:
+                cons_sentence_ids.append(id_)
+        
+        sentence_ids_to_parses = dict(zip(all_sentence_ids, get_parses(all_sentence_ids)))
+        sentence_ids_to_NNPs = _get_NNP_tokens(all_sentence_ids, 
+                                sentence_ids_to_parses, combine_adjacent=False)
+        sentence_ids_to_sentiments = dict(zip(all_sentence_ids, get_sentiments(all_sentence_ids)))
+
+        '''
+        positive_conservative_indices = [s_i for s_i in xrange(len(all_sentence_ids))
+                                if sentence_ids_to_sentiments[all_sentence_ids[s_i]] > 1 and 
+                                   sent_ids_to_subreddits[all_sentence_ids[s_i]] == "Conservative"]
+
+        positive_liberal_indices = [s_i for s_i in xrange(len(all_sentence_ids))
+                                if sentence_ids_to_sentiments[all_sentence_ids[s_i]] > 1 and 
+                                   sent_ids_to_subreddits[all_sentence_ids[s_i]] == "progressive"]
+        pdb.set_trace()
+        
+        for id_ in all_sentence_ids:
+            ##
+            # @TODO just using first for now (if multiple)
+            if (len(sentence_ids_to_NNP_tokens[id_])) > 0:
+                nnp = sentence_ids_to_NNP_tokens[id_][0]
+                if sent_ids_to_subreddits[id_] == "Conservative":
+                    expected = observed_sentiment(nnp, subreddit="Conservative", 
+                                sentence_ids=cons_sentence_ids, 
+                                sentence_ids_to_NNPs=sentence_ids_to_NNPs,
+                                sentence_ids_to_sentiments=sentence_ids_to_sentiments)[0]
+                else:
+                    expected = observed_sentiment(nnp, subreddit="progressive",
+                                                sentence_ids=prog_sentence_ids, 
+                                                sentence_ids_to_NNPs=sentence_ids_to_NNPs,
+                                                sentence_ids_to_sentiments=sentence_ids_to_sentiments)[0]
+                observed = sentence_ids_to_sentiments[id_]
+                observed_minus_expected[id_] = observed - expected
+            else:
+                observed_minus_expected[id_] = 0
+        #return observed_minus_expected, sentence_ids_to_sentiments, sentence_ids_to_labels
+        '''
+
+        NNPs = []
+        for sent_NNPs in sentence_ids_to_NNPs.values():
+            try:
+                NNPs.extend([s.lower() for s in sent_NNPs])
+            except:
+                pdb.set_trace()
+
+  
+        NNPs = list(set(NNPs))
+        # progressive_indices, conservative_indices,  
+        # "progressive-NNP", "conservative-NNP", 
+        
+        # "conservative-NNP", "conservative_indices"
 
 
+        X = vectorizer.fit_transform(sentence_texts, 
+                                    interaction_prefixes=["conservative-NNP", "progressive-NNP"],#interaction_prefixes=["progressive", "NNP"],
+                                    interaction_doc_indices=[conservative_indices, progressive_indices],#, progressive_indices],
+                                    interaction_terms=[NNPs, NNPs])
+
+        #pdb.set_trace()
         #sentence_NNPs = get_NNPs_from_comment(sentence_texts)
     else:
         vectorizer = CountVectorizer(ngram_range=(1,2), 
@@ -1094,7 +1213,7 @@ def sentence_classification(use_pretense=False, model="SVC",
 
         ####
         X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
-        #X = scipy.sparse.hstack((X, x0)).tocsr()
+        #X = scipy.sparse.hstack((X, X0)).tocsr()
         
 
         #scalar = .001    
@@ -1107,15 +1226,19 @@ def sentence_classification(use_pretense=False, model="SVC",
             sentence_id = all_sentence_ids[i]
 
             if sent_ids_to_subreddits[sentence_id] == "Conservative":
-                X0[i,conservative_j] = scalar*predicted_probabilities_of_being_liberal[i]
-
+                #X0[i,conservative_j] = scalar*predicted_probabilities_of_being_liberal[i]
+                X0[i,conservative_j-1] = observed_minus_expected[sentence_id]
+                #X[i,conservative_j] = observed_minus_expected[sentence_id]
             else:
-                X0[i, liberal_j-1] = scalar*1.0 # 'liberal intercept'
-                X0[i,liberal_j] = scalar*(1-predicted_probabilities_of_being_liberal[i])
-
+                #X0[i, liberal_j-1] = scalar*1.0 # 'liberal intercept'
+                #X[i, liberal_j-1] = scalar*1.0 # 'liberal intercept'
+                #X0[i,liberal_j] = scalar*(1-predicted_probabilities_of_being_liberal[i])
+                X0[i,liberal_j] = observed_minus_expected[sentence_id]
+                #X[i, liberal_j] =observed_minus_expected[sentence_id]
 
     # move the folds to the *comment* level
-    kf = KFold(len(all_comment_ids), n_folds=5, shuffle=True, random_state=1069)
+    #random_state=1069
+    kf = KFold(len(all_comment_ids), n_folds=n_folds, shuffle=True, random_state=seed)
 
     recalls, precisions, Fs = [], [], []
     AUCs = []
@@ -1174,6 +1297,7 @@ def sentence_classification(use_pretense=False, model="SVC",
             clf = baseline_clf
 
         sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
+
         if not model=="baseline":
             if use_pretense:
 
@@ -1182,7 +1306,8 @@ def sentence_classification(use_pretense=False, model="SVC",
                 kf_lambda = KFold(X_train.shape[0], n_folds=5, shuffle=True, random_state=5)
 
                 # now try to balance predictions?
-                _lambdas = np.linspace(.9,1,20)
+
+                _lambdas = np.linspace(.95,1,10)
                 best_lambda, best_f1 = _lambdas[0], -1
 
                 norm = lambda v: v / max(v)
@@ -1219,7 +1344,7 @@ def sentence_classification(use_pretense=False, model="SVC",
                         best_lambda = _lambda
                 clf.fit(X_train, y_train)
                 clf0.fit(X0_train, y_train)
-      
+                pdb.set_trace()
             else:
                 clf.fit(X_train, y_train)
             #pdb.set_trace()
@@ -1282,6 +1407,7 @@ def sentence_classification(use_pretense=False, model="SVC",
     #print "average (average) kappa: %s\n" % avg(kappas)
     print "average AUC: %s" % avg(AUCs)
     return Fs, recalls, precisions#, kappas
+        
 
 def sentence_liberal_conservative_model():
     conservative_comment_ids = get_all_comments_from_subreddit("Conservative")
@@ -1411,7 +1537,7 @@ def pretense_experiment(use_pretense=False, at_least=1, model="SGD",
                 get_all_comments_from_subreddit("progressive") if c_id in labeled_comment_ids]))
 
     all_comment_ids = conservative_comment_ids + liberal_comment_ids
-    #pdb.set_trace()
+
     #all_comment_ids = list(set(all_comment_ids))
     ironic_comment_ids = get_ironic_comment_ids_at_least(at_least)
     #ironic_comment_ids = majority_irony()[0]
@@ -1426,9 +1552,7 @@ def pretense_experiment(use_pretense=False, at_least=1, model="SGD",
         for x_i in X:
             #p_i = clf.predict_proba(x_i)[0][1]
             p_i = clf.predict(x_i)[0]
-            #pdb.set_trace()
             predicted_probabilities_of_being_liberal.append(p_i)
-    #pdb.set_trace()
         
     comment_texts, y = [], []
     for id_ in all_comment_ids:
