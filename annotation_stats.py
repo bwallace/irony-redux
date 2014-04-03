@@ -995,12 +995,35 @@ class InterpolatedClassifier:
         return raw_pred > .5
 
 
-def _get_NNP_tokens(all_sentence_ids, sentence_ids_to_parses, combine_adjacent=True):
+def _get_comment_id_for_sentence(sentence_id):
+    comment_id = _grab_single_element(cursor.execute(
+        'select comment_id from irony_commentsegment where id=%s' % sentence_id).fetchall())[0]
+    return comment_id 
+
+def _get_comment_title_for_sentence(sentence_id):
+    comment_id = _get_comment_id_for_sentence(sentence_id)
+    text = _grab_single_element(cursor.execute(
+            'select thread_title from irony_comment where id=%s;' % comment_id).fetchall())[0]
+    return text
+
+def _get_comment_title_parse_for_sentence(sentence_id):
+    comment_id = _get_comment_id_for_sentence(sentence_id)
+    #pdb.set_trace()
+    tags = _grab_single_element(cursor.execute(
+            'select tag from irony_comment where id=%s;' % comment_id).fetchall())[0]
+    return tags
+
+def _get_NNP_tokens(all_sentence_ids, sentence_ids_to_parses, combine_adjacent=True,
+                        add_comment_NNPs=False):
     all_sentence_NNP_tokens = []
     for s_i in xrange(len(all_sentence_ids)):
         sentence_NNP_tokens = []
         sentence_id = all_sentence_ids[s_i]
         parse = sentence_ids_to_parses[sentence_id]
+        if add_comment_NNPs: 
+            comment_title_parse = _get_comment_title_parse_for_sentence(sentence_id)
+            #parse = parse
+
         prev_tag = None # catch adjacent tags
         cur_word = None
         for tok in parse.split(" "):
@@ -1020,6 +1043,13 @@ def _get_NNP_tokens(all_sentence_ids, sentence_ids_to_parses, combine_adjacent=T
             elif combine_adjacent and cur_word is not None:
                 sentence_NNP_tokens.append(cur_word)
                 cur_word = None
+
+        if add_comment_NNPs:
+            for tok in comment_title_parse.split(" "):
+                word, tag = tok.split("/")[-2:]
+                if tag == "NNP":
+                    sentence_NNP_tokens.append(word)
+                    #sentence_NNP_tokens.append("COMMENT%s" % word)
 
                 
         all_sentence_NNP_tokens.append(sentence_NNP_tokens)
@@ -1053,7 +1083,9 @@ def observed_sentiment(nnp_token, subreddit="progressive", sentence_ids=None,
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import cross_validation
 def sentence_classification(use_pretense=False, model="SVC", 
-                            add_interactions=False, verbose=False, tfidf=True, n_folds=5, seed=30, add_sentiment=False):
+                            add_interactions=False, add_comment_interactions=False,
+                            verbose=False, tfidf=True, 
+                            n_folds=5, seed=30, add_sentiment=False):
     print "-- sentence classification! ---"
     # @TODO refactor -- this is redundant with code above!!!
     # only keep the sentences for which we have 'final' comment 
@@ -1093,6 +1125,8 @@ def sentence_classification(use_pretense=False, model="SVC",
     all_sentence_ids, sentence_texts, sentence_lbls = get_texts_and_labels_for_sentences(
         all_sentence_ids, repeat=False, collapse=collapse_f)
 
+
+
     sentence_ids_to_parses = dict(zip(all_sentence_ids, get_parses(all_sentence_ids)))
     sentence_ids_to_sentiments = dict(zip(all_sentence_ids, get_sentiments(all_sentence_ids)))
     sentence_ids_to_labels = dict(zip(all_sentence_ids, sentence_lbls))
@@ -1100,7 +1134,8 @@ def sentence_classification(use_pretense=False, model="SVC",
 
     if add_interactions:
         vectorizer = InteractionTermCountVectorizer(ngram_range=(1,2), 
-                                        stop_words="english", binary=False, max_features=50000)
+                                        stop_words="english", binary=False, 
+                                        max_features=50000)
         # add interaction terms for liberals
         
         #pdb.set_trace()
@@ -1127,7 +1162,8 @@ def sentence_classification(use_pretense=False, model="SVC",
         
         sentence_ids_to_parses = dict(zip(all_sentence_ids, get_parses(all_sentence_ids)))
         sentence_ids_to_NNPs = _get_NNP_tokens(all_sentence_ids, 
-                                sentence_ids_to_parses, combine_adjacent=False)
+                                sentence_ids_to_parses, combine_adjacent=False,
+                                add_comment_NNPs=add_comment_interactions)
         sentence_ids_to_sentiments = dict(zip(all_sentence_ids, get_sentiments(all_sentence_ids)))
 
         '''
@@ -1163,39 +1199,55 @@ def sentence_classification(use_pretense=False, model="SVC",
         '''
 
         NNPs = []
-        for sent_NNPs in sentence_ids_to_NNPs.values():
-            try:
-                NNPs.extend([s.lower() for s in sent_NNPs])
-            except:
-                pdb.set_trace()
+        comment_NNPs = []
+        all_doc_features_d = {}
+        for sent_id, sent_NNPs in sentence_ids_to_NNPs.items():
+            cur_doc_features = []
+            for sent_NNP in sent_NNPs:
+                s = sent_NNP.lower()
+                
+                index_ = sentence_ids_to_rows[sent_id]
+                sent_text = sentence_texts[index_]
+                if sent_NNP not in sent_text:
+                    cur_doc_features.append("comment-%s-%s" % 
+                                    (sent_ids_to_subreddits[sent_id], sent_NNP))
+                else:
+                    NNPs.append(s)
+                #pdb.set_trace()
+            all_doc_features_d[sent_id] = cur_doc_features
 
-  
+
         NNPs = list(set(NNPs))
-        # progressive_indices, conservative_indices,  
-        # "progressive-NNP", "conservative-NNP", 
-        
-        # "conservative-NNP", "conservative_indices"
+        all_doc_features = []
+        for id_ in all_sentence_ids:
+            all_doc_features.append(all_doc_features_d[id_])
 
 
+        ## need to allow for list
         X = vectorizer.fit_transform(sentence_texts, 
                                     interaction_prefixes=["conservative-NNP", "progressive-NNP"],#interaction_prefixes=["progressive", "NNP"],
                                     interaction_doc_indices=[conservative_indices, progressive_indices],#, progressive_indices],
-                                    interaction_terms=[NNPs, NNPs])
-
+                                    interaction_terms=[NNPs, NNPs],
+                                    singleton_doc_features=all_doc_features)
+       
         #pdb.set_trace()
         #sentence_NNPs = get_NNPs_from_comment(sentence_texts)
     else:
         vectorizer = CountVectorizer(ngram_range=(1,2), 
-                                        stop_words="english", binary=False, max_features=50000)
+                                        stop_words="english", binary=False, 
+                                        max_features=50000)
         X = vectorizer.fit_transform(sentence_texts)
-        if add_sentiment:
-            X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 1)))
-            X = scipy.sparse.hstack((X, X0)).tocsr()
-            for i in xrange(X.shape[0]):
-                sentence_id = all_sentence_ids[i]
-                X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <=0 else 0
-                #X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
-                #X[i, X.shape[1] - 1] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+
+
+    if add_sentiment:
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 1)))
+        X = scipy.sparse.hstack((X, X0)).tocsr()
+        for i in xrange(X.shape[0]):
+            sentence_id = all_sentence_ids[i]
+            #pdb.set_trace()
+            X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <=0 else 0
+            #X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
+            #X[i, X.shape[1] - 1] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
     if tfidf:
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
