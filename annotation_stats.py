@@ -1053,7 +1053,7 @@ def observed_sentiment(nnp_token, subreddit="progressive", sentence_ids=None,
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import cross_validation
 def sentence_classification(use_pretense=False, model="SVC", 
-                            add_interactions=False, verbose=False, tfidf=True, n_folds=5, seed=30):
+                            add_interactions=False, verbose=False, tfidf=True, n_folds=5, seed=30, add_sentiment=False):
     print "-- sentence classification! ---"
     # @TODO refactor -- this is redundant with code above!!!
     # only keep the sentences for which we have 'final' comment 
@@ -1188,7 +1188,14 @@ def sentence_classification(use_pretense=False, model="SVC",
         vectorizer = CountVectorizer(ngram_range=(1,2), 
                                         stop_words="english", binary=False, max_features=50000)
         X = vectorizer.fit_transform(sentence_texts)
-    
+        if add_sentiment:
+            X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 1)))
+            X = scipy.sparse.hstack((X, X0)).tocsr()
+            for i in xrange(X.shape[0]):
+                sentence_id = all_sentence_ids[i]
+                X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <=0 else 0
+                #X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
+                #X[i, X.shape[1] - 1] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
     if tfidf:
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
@@ -2006,6 +2013,37 @@ def get_texts_and_labels(segment_ids):
         
     return texts, labels
 
+def get_sentiment(id):
+    cursor.execute('select sentiment from irony_commentsegment where id=%s' % id)
+    return cursor.fetchall()[0][0]
+
+def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
+    cursor.execute('select comment_id from irony_commentsegment where id=%s' % id)
+    comment_id = cursor.fetchall()[0][0]
+    cursor.execute('select distinct id from irony_commentsegment where comment_id=%s' % comment_id)
+    neighbors = [y[0] for y in cursor.fetchall()]
+    mean_sentiment = 0.
+    for neighbor in neighbors:
+        mean_sentiment += sentence_ids_to_sentiments[neighbor]
+    #return mean_sentiment / len(neighbors) - sentence_ids_to_sentiments[id]
+    return abs(mean_sentiment / len(neighbors) - sentence_ids_to_sentiments[id])
+
+def sentiment_stats():
+    segment_ids = get_labeled_thrice_segments()
+    i_sentiment_distribution = [0.] * 5
+    n_sentiment_distribution = [0.] * 5
+    for id in segment_ids:
+        if is_segment_ironic(id):
+            i_sentiment_distribution[get_sentiment(id) + 2] += 1
+        else:
+            n_sentiment_distribution[get_sentiment(id) + 2] += 1
+    z = sum(i_sentiment_distribution)
+    normalized_i = [x / z for x in i_sentiment_distribution]
+    z = sum(n_sentiment_distribution)
+    normalized_n = [x / z for x in n_sentiment_distribution]
+    print normalized_i
+    print normalized_n
+    
 def experiment(model="SGD", verbose=False):
     labeled_segment_ids = get_labeled_thrice_segments()
     segment_texts, y = get_texts_and_labels(labeled_segment_ids)
