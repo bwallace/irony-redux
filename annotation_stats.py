@@ -14,11 +14,14 @@ from sklearn.feature_extraction.text import CountVectorizer
 ###
 # /Library/Frameworks/Python.framework/Versions/7.3/lib/python2.7/site-packages/sklearn/feature_extraction/text2.py
 #
+from interaction_term_vectorizer import InteractionTermCountVectorizer
+# antiquated!
+'''
 try:
     from sklearn.feature_extraction.text2 import InteractionTermCountVectorizer
 except:
     print "InteractionTermCountVectorizer not found!"
-
+'''
 from sklearn.cross_validation import KFold
 from sklearn.grid_search import GridSearchCV
 from sklearn.svm import SVC
@@ -1134,7 +1137,7 @@ def sentence_classification(use_pretense=False, model="SVC",
 
     if add_interactions:
         vectorizer = InteractionTermCountVectorizer(ngram_range=(1,2), 
-                                        stop_words="english", binary=False, 
+                                        stop_words="english", binary=False,
                                         max_features=50000)
         # add interaction terms for liberals
         
@@ -1203,14 +1206,20 @@ def sentence_classification(use_pretense=False, model="SVC",
         all_doc_features_d = {}
         for sent_id, sent_NNPs in sentence_ids_to_NNPs.items():
             cur_doc_features = []
+
+            if sentence_ids_to_sentiments[sent_id] > 0:
+                cur_doc_features.append("sentiment-positive")
+
             for sent_NNP in sent_NNPs:
                 s = sent_NNP.lower()
                 
                 index_ = sentence_ids_to_rows[sent_id]
                 sent_text = sentence_texts[index_]
                 if sent_NNP not in sent_text:
-                    cur_doc_features.append("comment-%s-%s" % 
-                                    (sent_ids_to_subreddits[sent_id], sent_NNP))
+                    if sentence_ids_to_sentiments[sent_id] > 0:
+                        cur_doc_features.append("comment-%s-%s-positive" % 
+                                        (sent_ids_to_subreddits[sent_id], s))      
+                    
                 else:
                     NNPs.append(s)
                 #pdb.set_trace()
