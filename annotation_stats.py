@@ -21,7 +21,7 @@ except:
 
 from sklearn.cross_validation import KFold
 from sklearn.grid_search import GridSearchCV
-from sklearn.svm import SVC
+from sklearn.svm import SVC, NuSVC
 from sklearn.svm import LinearSVC
 from sklearn.linear_model import SGDClassifier
 from sklearn.naive_bayes import MultinomialNB
@@ -1248,9 +1248,11 @@ def sentence_classification(use_pretense=False, model="SVC",
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             #pdb.set_trace()
-            #X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <=0 else 0
-            X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
+            X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
+            #X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
             X[i, X.shape[1] - 2] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+            #X[i, X.shape[1] - 3] = -1 if len(sentence_ids_to_parses[sentence_id].split()) > 25 else 1
+            
     if tfidf:
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
@@ -1342,6 +1344,10 @@ def sentence_classification(use_pretense=False, model="SVC",
             #svc = SVC(kernel="linear", class_weight="auto", probability=True)
             parameters = {'C':[ .0001, .001, .01,  .1, 1, 10, 100]}
             clf = GridSearchCV(svc, parameters, scoring='f1')
+            # The following does not work. WHY?
+            # nusvc = NuSVC()
+            # parameters = {'nu':[0.0001]}
+            # clf = GridSearchCV(nusvc, parameters, scoring='f1')
             if use_pretense:
                 #svm0 = LinearSVC(loss="hinge", penalty="l2", class_weight="auto", probability=True)
                 svm0 = LinearSVC(loss="l2", penalty="l2", dual=False, class_weight="auto")
