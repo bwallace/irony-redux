@@ -1,3 +1,10 @@
+"""
+a whole bunch of utility methods for the irony
+project. in particular, this provides methods to
+talk to the database.
+@TODO clean up
+"""
+
 import pdb
 import sqlite3
 import sys
@@ -5,6 +12,7 @@ import collections
 from collections import defaultdict, Counter
 import re
 import itertools
+import csv
 
 import nltk # for metrics
 
@@ -102,8 +110,6 @@ def disagreed_upon():
             disagreement_ids.append(id_)
     return disagreement_ids, comments_to_lbls
 
-
-import csv
 def comments_to_disk(outpath="for-ben.txt"):
     labeled_comment_ids = get_labeled_thrice_comments()
     sentence_ids, subreddits = get_sentence_ids_for_comments(labeled_comment_ids)
@@ -1331,6 +1337,7 @@ def sentence_classification(use_pretense=False, model="SVC",
             sentence_ids = comments_d[comment]["sentence_ids"]
             test_rows.extend([sentence_ids_to_rows[sent_id] for sent_id in sentence_ids])
             y_test.extend([sentence_ids_to_labels[sent_id] for sent_id in sentence_ids])
+
 
         X_train, X_test = X[train_rows], X[test_rows]
         if use_pretense:
