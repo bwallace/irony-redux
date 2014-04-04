@@ -32,7 +32,7 @@ except:
 '''
 from sklearn.cross_validation import KFold
 from sklearn.grid_search import GridSearchCV
-from sklearn.svm import SVC
+from sklearn.svm import SVC, NuSVC
 from sklearn.svm import LinearSVC
 from sklearn.linear_model import SGDClassifier
 from sklearn.naive_bayes import MultinomialNB
@@ -1257,18 +1257,29 @@ def sentence_classification(use_pretense=False, model="SVC",
         X = vectorizer.fit_transform(sentence_texts)
 
 
-    if add_sentiment:
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
-        X = scipy.sparse.hstack((X, X0)).tocsr()
-        for i in xrange(X.shape[0]):
-            sentence_id = all_sentence_ids[i]
-            #pdb.set_trace()
-            #X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <=0 else 0
-            X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
-            X[i, X.shape[1] - 2] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
     if tfidf:
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
+
+    if add_sentiment:
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        X = scipy.sparse.hstack((X, X0)).tocsr()
+        list1, list2 = [], []
+        for i in xrange(X.shape[0]):
+            sentence_id = all_sentence_ids[i]
+            #pdb.set_trace()
+            #X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
+            #X[i, X.shape[1] - 1] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+            list1.append(1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1)
+            list2.append(get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments))
+        tmp1 = np.linalg.norm(np.array(list1))
+        tmp2 = np.linalg.norm(np.array(list2))
+        for i, x1, x2 in zip(range(X.shape[0]), list1, list2):
+            X[i, X.shape[1] - 1] = x1 / tmp1 if tfidf else x1
+            X[i, X.shape[1] - 2] = x2 / tmp2 if tfidf else x2
+            # Things don't work:
+            #X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
+            #X[i, X.shape[1] - 3] = -1 if len(sentence_ids_to_parses[sentence_id].split()) > 25 else 1        
 
     #vectorizer = sklearn.feature_extraction.text.TfidfVectorizer(
     #                                    max_features=10000, ngram_range=(1,2), 
@@ -1358,6 +1369,10 @@ def sentence_classification(use_pretense=False, model="SVC",
             #svc = SVC(kernel="linear", class_weight="auto", probability=True)
             parameters = {'C':[ .0001, .001, .01,  .1, 1, 10, 100]}
             clf = GridSearchCV(svc, parameters, scoring='f1')
+            # The following does not work. WHY?
+            # nusvc = NuSVC()
+            # parameters = {'nu':[0.0001]}
+            # clf = GridSearchCV(nusvc, parameters, scoring='f1')
             if use_pretense:
                 #svm0 = LinearSVC(loss="hinge", penalty="l2", class_weight="auto", probability=True)
                 svm0 = LinearSVC(loss="l2", penalty="l2", dual=False, class_weight="auto")
