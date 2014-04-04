@@ -2,7 +2,7 @@ import pdb
 import sqlite3
 import sys
 import collections
-from collections import defaultdict
+from collections import defaultdict, Counter
 import re
 import itertools
 
@@ -38,6 +38,9 @@ import numpy as np
 import statsmodels.api as sm
 
 import search_reddit
+
+import operator
+
 
 import configparser # easy_install configparser
 
@@ -1240,14 +1243,14 @@ def sentence_classification(use_pretense=False, model="SVC",
 
 
     if add_sentiment:
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 1)))
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             #pdb.set_trace()
-            X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <=0 else 0
-            #X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
-            #X[i, X.shape[1] - 1] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+            #X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <=0 else 0
+            X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
+            X[i, X.shape[1] - 2] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
     if tfidf:
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
@@ -1992,7 +1995,6 @@ def is_segment_ironic(segment_id, at_least=2):
     cursor.execute('select label from irony_label where segment_id=%s and labeler_id in %s' % (segment_id, labeler_id_str))
     return cursor.fetchall().count((1,)) >= 2
 
-import operator
 def preliminary_test_with_NNPs():
     cursor.execute('select segment_id from irony_label group by segment_id having count(labeler_id) >= 3')
     ids = [t[0] for t in cursor.fetchall() if t[0] != None]
@@ -2074,11 +2076,18 @@ def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
     comment_id = cursor.fetchall()[0][0]
     cursor.execute('select distinct id from irony_commentsegment where comment_id=%s' % comment_id)
     neighbors = [y[0] for y in cursor.fetchall()]
+    #counts = dict(zip([-2,-1,0,1,2], [0]*5))
+    sents = []
     mean_sentiment = 0.
     for neighbor in neighbors:
         mean_sentiment += sentence_ids_to_sentiments[neighbor]
+        #counts[sentence_ids_to_sentiments[neighbor]] += 1
+        sents.append(sentence_ids_to_sentiments[neighbor])
     #return mean_sentiment / len(neighbors) - sentence_ids_to_sentiments[id]
-    return abs(mean_sentiment / len(neighbors) - sentence_ids_to_sentiments[id])
+    #return mean_sentiment / len(neighbors) - sentence_ids_to_sentiments[id]
+    #return 1 if max(counts.iteritems(), key=operator.itemgetter(1))[1] == sentence_ids_to_sentiments[id] else 0
+    #return 1 if Counter(sents).most_common(1)[0][0] == sentence_ids_to_sentiments[id] else 0
+    return Counter(sents).most_common(1)[0][0] - sentence_ids_to_sentiments[id] # best so far
 
 def sentiment_stats():
     segment_ids = get_labeled_thrice_segments()
