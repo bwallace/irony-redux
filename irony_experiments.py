@@ -210,7 +210,7 @@ def sentence_classification(model="SVC",
             preds = [baseline_clf() for i in xrange(len(y_test))]
 
         if verbose:
-            print show_most_informative_features(vectorizer, clf.best_estimator_)
+            print db_helper.show_most_informative_features(vectorizer, clf.best_estimator_)
 
         print sklearn.metrics.classification_report(y_test, preds)
         prec, recall, f, support = sklearn.metrics.precision_recall_fscore_support(
@@ -247,7 +247,7 @@ def _make_interaction_features(all_sentence_ids, sentence_ids_to_parses,
                                 sentence_ids_to_sentiments, 
                                 add_thread_level_interactions=False, 
                                 sentence_ids_to_subreddits=None,
-                                add_sentiment=False):
+                                add_sentiment=True):
         
     NNPs = []
     ###
@@ -265,8 +265,12 @@ def _make_interaction_features(all_sentence_ids, sentence_ids_to_parses,
 
         ### @TODO not sure if we want to add this feature here,
         # DK has done some additional engineering....
-        if add_sentiment and sentence_ids_to_sentiments[sent_id] > 0:
-            cur_doc_features.append("sentiment-positive")
+        if add_sentiment:
+            if sentence_ids_to_sentiments[sent_id] > 0:
+                cur_doc_features.append("sentiment-positive")
+
+            if sentence_ids_to_sentiments[sent_id] > 1:
+                cur_doc_features.append("sentence-REALLY-positive")
 
         for sent_NNP in sent_NNPs:
             s = sent_NNP.lower()
