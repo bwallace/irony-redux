@@ -25,6 +25,7 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.metrics import precision_recall_curve
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import cross_validation
+from sklearn.preprocessing import normalize
 
 import scipy
 import numpy as np
@@ -120,15 +121,36 @@ def sentence_classification(model="SVC",
                                         max_features=max_features)
         X = vectorizer.fit_transform(sentence_texts)
 
-
     if tfidf:
         transformer = TfidfTransformer()
         #pdb.set_trace()
         X = transformer.fit_transform(X)
+            
+    if add_sentiment:
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        X = scipy.sparse.hstack((X, X0)).tocsr()
+        for i in xrange(X.shape[0]):
+            sentence_id = all_sentence_ids[i]
+            X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
+            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments) 
+            # X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1 
+            # X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+
+        # tf-idf
+        # for j in xrange(X.shape[1]):
+        #     nonzero = 1.            
+        #     for i in xrange(X.shape[0]):
+        #         if X[i,j] != 0: nonzero += 1
+        #     for i in xrange(X.shape[0]):
+        #         X[i,j] = X[i,j] * (np.log((X.shape[1] + 1.) / nonzero) + 1)
+            
+        X = normalize(X, norm='l2', copy=False)
+
 
     #### 
     # sentiment magic!
-    if add_sentiment:
+    if False:
+    #if add_sentiment:
         #X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
         total_sent_features = 5 + 7
         X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], total_sent_features)))
@@ -177,6 +199,7 @@ def sentence_classification(model="SVC",
             #pdb.set_trace()
         #X = sklearn.preprocessing.normalize(X,axis=0)
         #pdb.set_trace()
+
 
     ####
     # ok -- now we cross-fold validate
