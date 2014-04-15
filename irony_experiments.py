@@ -25,6 +25,7 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.metrics import precision_recall_curve
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import cross_validation
+from sklearn.preprocessing import normalize
 
 import scipy
 import numpy as np
@@ -108,7 +109,7 @@ def sentence_classification(model="SVC",
                 sentence_ids_to_sentiments, 
                 add_thread_level_interactions=add_thread_level_interactions,
                 sentence_ids_to_subreddits=sentence_ids_to_subreddits,
-                add_sentiment=False)#add_sentiment)
+                add_sentiment=False)
 
         X = vectorizer.fit_transform(sentence_texts, 
                 interaction_prefixes=["conservative-NNP", "progressive-NNP"],#interaction_prefixes=["progressive", "NNP"],
@@ -122,17 +123,31 @@ def sentence_classification(model="SVC",
         X = vectorizer.fit_transform(sentence_texts)
 
 
+
+    if add_sentiment:
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        X = scipy.sparse.hstack((X, X0)).tocsr()
+        for i in xrange(X.shape[0]):
+            sentence_id = all_sentence_ids[i]
+            X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
+            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments) 
+
+    # row normalize features. Make sure that you are not normalizing twice. 
+    # Commnet out lines 993 and 994 in sklearn/feature_extract/text.py. 
+    # Or add features and run tfidf afterwards and get rid of this if-clause.
+    # if tfidf:
+    #     X = normalize(X, norm='l2', copy=False)
     if tfidf:
         transformer = TfidfTransformer()
-        #pdb.set_trace()
         X = transformer.fit_transform(X)
 
     #### 
     # sentiment magic!
-    if add_sentiment:
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
-        #total_sent_features = 5 + 7
-        #X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], total_sent_features)))
+    if False:
+    #if add_sentiment:
+        #X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        total_sent_features = 5 + 7
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], total_sent_features)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         sentiment_col, descrep_col = X.shape[1] - 1, X.shape[1] - 2
         #sent_j = X.shape[1] - total_sent_features - 1
@@ -152,33 +167,7 @@ def sentence_classification(model="SVC",
             X[i, descrep_col] = db_helper.get_sentiment_discrepancy(
                         sentence_id, sentence_ids_to_sentiments)  
 
-        #pdb.set_trace()
-        ###
-        # optional tfidf encoding
-        # unfortunately csc/csr matrices do not 
-        # support directly updating columns, so doing this
-        # the inefficient way for now!
-        ### my attempt at normalizing!
-        Z_sent = np.linalg.norm(X[:, sentiment_col].toarray())
-        Z_desc = np.linalg.norm(X[:, descrep_col].toarray())
-        for i in xrange(X.shape[0]):
-            X[i, sentiment_col] = X[i, sentiment_col] / Z_sent
-            X[i, descrep_col] = X[i, descrep_col] / Z_desc
 
-
-        #pdb.set_trace()
-
-
-        #pdb.set_trace()
-
-            # normalize
-            #Z = X[:, sentiment_col].sum()
-            #X[:, sentiment_col] = X[:, sentiment_col] / Z
-            #X[:, descrep_col] = X[:, descrep_col] / X[:, descrep_col].sum()
-            #pdb.set_trace()
-            #pdb.set_trace()
-        #X = sklearn.preprocessing.normalize(X,axis=0)
-        #pdb.set_trace()
 
     ####
     # ok -- now we cross-fold validate
