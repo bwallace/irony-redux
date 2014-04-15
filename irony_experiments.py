@@ -107,7 +107,8 @@ def sentence_classification(model="SVC",
                 sentence_ids_to_rows, sentence_texts, 
                 sentence_ids_to_sentiments, 
                 add_thread_level_interactions=add_thread_level_interactions,
-                sentence_ids_to_subreddits=sentence_ids_to_subreddits)
+                sentence_ids_to_subreddits=sentence_ids_to_subreddits,
+                add_sentiment=False)#add_sentiment)
 
         X = vectorizer.fit_transform(sentence_texts, 
                 interaction_prefixes=["conservative-NNP", "progressive-NNP"],#interaction_prefixes=["progressive", "NNP"],
@@ -129,26 +130,27 @@ def sentence_classification(model="SVC",
     #### 
     # sentiment magic!
     if add_sentiment:
-        #X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
-        total_sent_features = 5 + 7
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], total_sent_features)))
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        #total_sent_features = 5 + 7
+        #X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], total_sent_features)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
-        #sentiment_col, descrep_col = X.shape[1] - 1, X.shape[1] - 2
-        sent_j = X.shape[1] - total_sent_features - 1
+        sentiment_col, descrep_col = X.shape[1] - 1, X.shape[1] - 2
+        #sent_j = X.shape[1] - total_sent_features - 1
 
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             ## this can be -2 to 2
-            cur_sent_j = sent_j + sentence_ids_to_sentiments[sentence_id]+2
-            X[i, cur_sent_j] = 1.0
-            #X[i, sentiment_col] = sentence_ids_to_sentiments[sentence_id]
-            descrep = db_helper.get_sentiment_discrepancy(
-                             sentence_id, sentence_ids_to_sentiments)  
-            cur_sent_j = sent_j + 5 + (descrep + 3)
-            X[i, cur_sent_j] = 1.0
+            #cur_sent_j = sent_j + sentence_ids_to_sentiments[sentence_id]+2
+            #X[i, cur_sent_j] = 1.0
+            
+            X[i, sentiment_col] = sentence_ids_to_sentiments[sentence_id]
+            #descrep = db_helper.get_sentiment_discrepancy(
+            #                 sentence_id, sentence_ids_to_sentiments)  
+            #cur_sent_j = sent_j + 5 + (descrep + 3)
+            #X[i, cur_sent_j] = 1.0
 
-            #X[i, descrep_col] = db_helper.get_sentiment_discrepancy(
-            #            sentence_id, sentence_ids_to_sentiments)  
+            X[i, descrep_col] = db_helper.get_sentiment_discrepancy(
+                        sentence_id, sentence_ids_to_sentiments)  
 
         #pdb.set_trace()
         ###
@@ -157,11 +159,11 @@ def sentence_classification(model="SVC",
         # support directly updating columns, so doing this
         # the inefficient way for now!
         ### my attempt at normalizing!
-        #Z_sent = np.linalg.norm(X[:, sentiment_col].toarray())
-        #Z_desc = np.linalg.norm(X[:, descrep_col].toarray())
-        #for i in xrange(X.shape[0]):
-        #    X[i, sentiment_col] = X[i, sentiment_col] / Z_sent
-        #    X[i, descrep_col] = X[i, descrep_col] / Z_desc
+        Z_sent = np.linalg.norm(X[:, sentiment_col].toarray())
+        Z_desc = np.linalg.norm(X[:, descrep_col].toarray())
+        for i in xrange(X.shape[0]):
+            X[i, sentiment_col] = X[i, sentiment_col] / Z_sent
+            X[i, descrep_col] = X[i, descrep_col] / Z_desc
 
 
         #pdb.set_trace()
