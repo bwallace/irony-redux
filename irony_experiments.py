@@ -125,7 +125,7 @@ def sentence_classification(model="SVC",
         transformer = TfidfTransformer()
         #pdb.set_trace()
         X = transformer.fit_transform(X)
-            
+
     if add_sentiment:
         X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
@@ -133,19 +133,10 @@ def sentence_classification(model="SVC",
             sentence_id = all_sentence_ids[i]
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
             X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments) 
-            # X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1 
-            # X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
 
-        # tf-idf
-        # for j in xrange(X.shape[1]):
-        #     nonzero = 1.            
-        #     for i in xrange(X.shape[0]):
-        #         if X[i,j] != 0: nonzero += 1
-        #     for i in xrange(X.shape[0]):
-        #         X[i,j] = X[i,j] * (np.log((X.shape[1] + 1.) / nonzero) + 1)
-            
+    # row normalize features. Make sure that you are not normalizing twice. Commnet out lines 993 and 994 in sklearn/feature_extract/text.py. Or add features and run tfidf afterwards and get rid of this if-clause.
+    if tfidf:
         X = normalize(X, norm='l2', copy=False)
-
 
     #### 
     # sentiment magic!
