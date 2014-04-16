@@ -125,12 +125,14 @@ def sentence_classification(model="SVC",
 
 
     if add_sentiment:
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
-            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments) 
+            X[i, X.shape[1] - 2], X[i, X.shape[1] - 3] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+            # the below could be useful
+            #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3]= db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
 
     # row normalize features. Make sure that you are not normalizing twice. 
     # Commnet out lines 993 and 994 in sklearn/feature_extract/text.py. 
