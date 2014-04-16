@@ -11,6 +11,7 @@ from collections import defaultdict
 import re
 import itertools
 import random
+import operator 
 
 # external
 import nltk # for metrics
@@ -46,7 +47,7 @@ sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
 def sentence_classification(model="SVC", 
                             add_interactions=False, add_thread_level_interactions=False,
                             verbose=False, tfidf=True, max_features=50000,
-                            n_folds=5, seed=30, add_sentiment=False):
+                            n_folds=5, seed=30, add_sentiment=False, iters=500, save_feature_weights=False):
     
     if add_thread_level_interactions and not add_interactions:
         raise Exception, "cannot add thread-level interactions with baseline interactions"
@@ -55,7 +56,7 @@ def sentence_classification(model="SVC",
     ####
     # get comments, figure out which subreddits they're from
     ####
-
+    
     # all comments labeled by three people
     labeled_comment_ids = db_helper.get_labeled_thrice_comments()
     # divvy labeled comments up according to whether they are 
@@ -141,41 +142,28 @@ def sentence_classification(model="SVC",
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
 
-    #### 
-    # sentiment magic!
-    if False:
-    #if add_sentiment:
-        #X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
-        total_sent_features = 5 + 7
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], total_sent_features)))
-        X = scipy.sparse.hstack((X, X0)).tocsr()
-        sentiment_col, descrep_col = X.shape[1] - 1, X.shape[1] - 2
-        #sent_j = X.shape[1] - total_sent_features - 1
-
-        for i in xrange(X.shape[0]):
-            sentence_id = all_sentence_ids[i]
-            ## this can be -2 to 2
-            #cur_sent_j = sent_j + sentence_ids_to_sentiments[sentence_id]+2
-            #X[i, cur_sent_j] = 1.0
-            
-            X[i, sentiment_col] = sentence_ids_to_sentiments[sentence_id]
-            #descrep = db_helper.get_sentiment_discrepancy(
-            #                 sentence_id, sentence_ids_to_sentiments)  
-            #cur_sent_j = sent_j + 5 + (descrep + 3)
-            #X[i, cur_sent_j] = 1.0
-
-            X[i, descrep_col] = db_helper.get_sentiment_discrepancy(
-                        sentence_id, sentence_ids_to_sentiments)  
-
-
 
     ####
     # ok -- now we cross-fold validate
+    #
+    # bcw -- 4/15 -- moving to 'bootstrap'
     ####
-    kf = KFold(len(all_comment_ids), n_folds=n_folds, shuffle=True, random_state=seed)
-
+    #kf = KFold(len(all_comment_ids), n_folds=n_folds, shuffle=True, random_state=seed)
+    
+    feature_weights = defaultdict(list) ## save feature weights across splits.
+    # record all metrics for each train/test split
+    # (this is what we use for our empirical counts)
     recalls, precisions, Fs, AUCs = [], [], [], []
-    for train, test in kf:
+    #for train, test in kf:
+    cur_iter = 0
+    
+    N_comments = len(all_comment_ids)
+    while cur_iter < iters:
+        if (cur_iter+1) % 10 == 0:
+            print "on iter %s" % (cur_iter + 1)
+        # we fix the seed so that results are comparable! 
+        train, test = sklearn.cross_validation.train_test_split(range(N_comments), test_size=.1, 
+                        random_state=seed * (cur_iter+1))
         train_comment_ids = db_helper._get_entries(all_comment_ids, train)
         train_rows, y_train = _get_rows_and_y_for_comments(train_comment_ids, 
                                 comments_d, sentence_ids_to_rows, sentence_ids_to_labels)
@@ -203,12 +191,24 @@ def sentence_classification(model="SVC",
         if verbose:
             print db_helper.show_most_informative_features(vectorizer, clf.best_estimator_)
 
-        print sklearn.metrics.classification_report(y_test, preds)
+        if save_feature_weights:
+            ranked_features = db_helper.show_most_informative_features(
+                                vectorizer, clf.best_estimator_, return_sorted_list=True)
+            
+            for w, feature in ranked_features:
+                feature_weights[feature].append(w)
+
+
+        if verbose:
+            print sklearn.metrics.classification_report(y_test, preds)
+
         prec, recall, f, support = sklearn.metrics.precision_recall_fscore_support(
                                     y_test, preds, beta=1)
-        recalls.append(recall)
-        precisions.append(prec)
-        Fs.append(f)
+        recalls.append(recall[1])
+        precisions.append(prec[1])
+        Fs.append(f[1])
+        #pdb.set_trace()
+        cur_iter += 1
 
     avg = lambda l : sum(l)/float(len(l))
     print "-"*20 + " summary " + "-"*20
@@ -218,9 +218,9 @@ def sentence_classification(model="SVC",
     print "add sentiment?: %s" % add_sentiment
     print "-"*20 + "results" + "-"*20
     print "average F: %s \naverage recall: %s \naverage precision: %s " % (
-                avg(Fs)[1], avg(recalls)[1], avg(precisions)[1])
+                avg(Fs), avg(recalls), avg(precisions))
     print "-"*49
-    return Fs, recalls, precisions
+    return Fs, recalls, precisions, feature_weights
 
 
 def _get_rows_and_y_for_comments(comment_ids, comments_d, sentence_ids_to_rows, 
@@ -310,6 +310,30 @@ def _keep_ids_in_list(ids, target_list):
         those entries that are *not* found in the target_list """
     return [id_ for id_ in ids if id_ in target_list]
 
+def _feature_dictionary_to_means(features):
+    feature_means = {}
+    for f, vals in features.items():
+        feature_means[f] = np.median(vals)#np.mean(vals)
 
+    return feature_means
 
+def get_top_features(feature_weights_dict, n=100):
+    f_dict = _feature_dictionary_to_means(feature_weights_dict)
+    #feature_absolute_vals = {}
+    #for f, mean in f_dict.items():
+    #    feature_absolute_vals[f] = abs(mean)
+    
+    sorted_x = sorted(feature_weights_dict.iteritems(), 
+                        key=operator.itemgetter(1), reverse=True)
+    #pdb.set_trace()
+    # most positive features, most negative features
+    return [x[0] for x in sorted_x[:n]], [x[0] for x in sorted_x[-n:]]
+
+def run_irony_experiments(iters=500):
+    F_baseline_svm, recalls_baseline_svm, precisions_baseline_svm, features_baseline_svm = \
+            sentence_classification(iters=iters, save_feature_weights=True)
+
+    F_interactions, recalls_interactions, precisions_interactions, features_interactions = \
+            sentence_classification(add_interactions=True, add_thread_level_interactions=True, 
+                add_sentiment=False, iters=iters, save_feature_weights=True)
 
