@@ -23,7 +23,7 @@ from sklearn.svm import SVC
 from sklearn.svm import LinearSVC
 from sklearn.linear_model import SGDClassifier
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import precision_recall_curve, pairwise
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import cross_validation
 from sklearn.preprocessing import normalize
@@ -123,23 +123,44 @@ def sentence_classification(model="SVC",
                                         max_features=max_features)
         X = vectorizer.fit_transform(sentence_texts)
 
-
-
     if add_sentiment:
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        user_to_sentiment, subreddit_to_sentiment = db_helper.get_sentiment_distribution()
+        sentence_ids_to_users = db_helper.get_sentence_ids_to_users()
+        
+        #val = 15
+        #print val
+        #print 'title sentiment discrepancy'
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
+        noredditor = 0
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
-            X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
-            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
-            # the below could be useful
+            try:
+                #dist1 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
+                dist1 = subreddit_to_sentiment[sentence_ids_to_subreddits[sentence_id]]
+            except:
+                noredditor += 1
+                dist1 = np.array([0.2,] * 5)
+            dist2 = np.array([0.01] * 5)
+            # print sentence_id
+            # print sentence_ids_to_sentiments[sentence_id]
+            dist2[sentence_ids_to_sentiments[sentence_id] + 2] += 0.95
+            X[i, X.shape[1] - 1] = pairwise.cosine_similarity(dist1, dist2)[0][0]
+            #X[i, X.shape[1] - 1] = db_helper.kld(dist1, dist2)
+            X[i, X.shape[1] - 2] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
+            X[i, X.shape[1] - 3] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)            
+            #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+            
+            #X[i, X.shape[1] - 3] = 1 if db_helper.length_feature(sentence_id) < 15 else -1
             #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3]= db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+        print noredditor
 
     # row normalize features. Make sure that you are not normalizing twice. 
     # Commnet out lines 993 and 994 in sklearn/feature_extract/text.py. 
     # Or add features and run tfidf afterwards and get rid of this if-clause.
     # if tfidf:
     #     X = normalize(X, norm='l2', copy=False)
+
     if tfidf:
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
