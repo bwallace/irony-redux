@@ -82,6 +82,9 @@ def sentence_classification(model="SVC",
         db_helper.get_texts_and_labels_for_sentences(all_sentence_ids, 
                                         repeat=False, collapse=collapse_f)
 
+    print len(sentence_lbls)
+    print sentence_lbls.count(1)
+
     ####
     # set up some convenient dictionaries 
     sentence_ids_to_parses = dict(zip(all_sentence_ids, db_helper.get_parses(all_sentence_ids)))
@@ -130,25 +133,25 @@ def sentence_classification(model="SVC",
         #val = 15
         #print val
         #print 'title sentiment discrepancy'
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         noredditor = 0
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             try:
-                #dist1 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
+                dist0 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
                 dist1 = subreddit_to_sentiment[sentence_ids_to_subreddits[sentence_id]]
             except:
                 noredditor += 1
+                dist0 = np.array([0.2,] * 5)
                 dist1 = np.array([0.2,] * 5)
             dist2 = np.array([0.01] * 5)
-            # print sentence_id
-            # print sentence_ids_to_sentiments[sentence_id]
             dist2[sentence_ids_to_sentiments[sentence_id] + 2] += 0.95
-            X[i, X.shape[1] - 1] = pairwise.cosine_similarity(dist1, dist2)[0][0]
-            #X[i, X.shape[1] - 1] = db_helper.kld(dist1, dist2)
-            X[i, X.shape[1] - 2] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
-            X[i, X.shape[1] - 3] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)            
+            X[i, X.shape[1] - 4] = pairwise.cosine_similarity(dist0, dist2)[0][0]
+            X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
+            #X[i, X.shape[1] - 1] = 1 if db_helper.kld(dist1, dist2) > 1.6 else -1
+            X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
+            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)            
             #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
             
             #X[i, X.shape[1] - 3] = 1 if db_helper.length_feature(sentence_id) < 15 else -1
@@ -182,7 +185,7 @@ def sentence_classification(model="SVC",
     
     N_comments = len(all_comment_ids)
     while cur_iter < iters:
-        if (cur_iter+1) % 10 == 0:
+        if (cur_iter+1) % 100 == 0:
             print "on iter %s" % (cur_iter + 1)
         # we fix the seed so that results are comparable! 
         train, test = sklearn.cross_validation.train_test_split(range(N_comments), test_size=.1, 

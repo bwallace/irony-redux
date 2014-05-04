@@ -179,7 +179,7 @@ def any_irony():
 '''select comment_id from irony_label where count(*)'''
 def get_labeled_thrice_comments():
     cursor.execute(
-        '''select comment_id from irony_label group by comment_id having count(labeler_id) >= 3;'''
+        '''select comment_id from irony_label group by comment_id having count(distinct labeler_id) >= 3;'''
     )
 
     thricely_labeled_comment_ids = _grab_single_element(cursor.fetchall())
