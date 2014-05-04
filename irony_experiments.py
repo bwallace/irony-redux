@@ -46,7 +46,7 @@ sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
 
 def sentence_classification(model="SVC", 
                             add_interactions=False, add_thread_level_interactions=False,
-                            verbose=False, tfidf=True, max_features=50000,
+                            verbose=False, tfidf=True, max_features=50000, at_least=2,
                             n_folds=5, seed=30, add_sentiment=False, iters=500, save_feature_weights=False):
     
     if add_thread_level_interactions and not add_interactions:
@@ -74,9 +74,11 @@ def sentence_classification(model="SVC",
     sentence_ids_to_subreddits, comments_d, all_sentence_ids = \
                                 _map_sentences_to_subreddits(all_comment_ids)
 
+    
+
     # this defines how we map from multiple labels (3) to a single
     # summary label
-    collapse_f = lambda lbl_set: 1 if lbl_set.count(1) >= 2 else -1
+    collapse_f = lambda lbl_set: 1 if lbl_set.count(1) >= at_least else -1
 
     all_sentence_ids, sentence_texts, sentence_lbls = \
         db_helper.get_texts_and_labels_for_sentences(all_sentence_ids, 
@@ -84,6 +86,7 @@ def sentence_classification(model="SVC",
 
     ####
     # set up some convenient dictionaries 
+
     sentence_ids_to_parses = dict(zip(all_sentence_ids, db_helper.get_parses(all_sentence_ids)))
     sentence_ids_to_sentiments = dict(zip(all_sentence_ids, db_helper.get_sentiments(all_sentence_ids)))
     sentence_ids_to_labels = dict(zip(all_sentence_ids, sentence_lbls))
@@ -110,6 +113,7 @@ def sentence_classification(model="SVC",
                 sentence_ids_to_sentiments, 
                 add_thread_level_interactions=add_thread_level_interactions,
                 sentence_ids_to_subreddits=sentence_ids_to_subreddits,
+                #sentence_ids_to_comment_ids=
                 add_sentiment=False)
 
         X = vectorizer.fit_transform(sentence_texts, 
@@ -131,7 +135,8 @@ def sentence_classification(model="SVC",
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
-            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments) 
+            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(
+                sentence_id, sentence_ids_to_sentiments) 
 
     # row normalize features. Make sure that you are not normalizing twice. 
     # Commnet out lines 993 and 994 in sklearn/feature_extract/text.py. 
@@ -165,17 +170,17 @@ def sentence_classification(model="SVC",
         train, test = sklearn.cross_validation.train_test_split(range(N_comments), test_size=.1, 
                         random_state=seed * (cur_iter+1))
         train_comment_ids = db_helper._get_entries(all_comment_ids, train)
-        train_rows, y_train = _get_rows_and_y_for_comments(train_comment_ids, 
+        train_rows, train_sentences, y_train = _get_rows_and_y_for_comments(train_comment_ids, 
                                 comments_d, sentence_ids_to_rows, sentence_ids_to_labels)
 
         test_comment_ids = db_helper._get_entries(all_comment_ids, test)
-        test_rows, y_test = _get_rows_and_y_for_comments(test_comment_ids, 
+        test_rows, test_sentences, y_test = _get_rows_and_y_for_comments(test_comment_ids, 
                                 comments_d, sentence_ids_to_rows, sentence_ids_to_labels)
         X_train, X_test = X[train_rows], X[test_rows]
-
+        #pdb.set_trace()
         if model == "SVC":
             svc = LinearSVC(loss="l2", penalty="l2", dual=False, class_weight="auto")
-            parameters = {'C':[ .0001, .001, .01,  .1, 1, 10, 100]}
+            parameters = {'C':[ .0001, .001, .01]}#,  .1, 1, 10, 100]}
             clf = GridSearchCV(svc, parameters, scoring='f1')
             clf.fit(X_train, y_train)
             preds = sgn(clf.decision_function(X_test))
@@ -213,6 +218,7 @@ def sentence_classification(model="SVC",
     avg = lambda l : sum(l)/float(len(l))
     print "-"*20 + " summary " + "-"*20
     print "model: %s" % model
+    print "target: %s out of 3 labeled as ironic" % at_least
     print "add interactions?: %s" % add_interactions
     print "add *thread* level interactions?: %s" % add_thread_level_interactions
     print "add sentiment?: %s" % add_sentiment
@@ -226,12 +232,15 @@ def sentence_classification(model="SVC",
 def _get_rows_and_y_for_comments(comment_ids, comments_d, sentence_ids_to_rows, 
                                     sentence_ids_to_labels):
     rows, y = [], []
+    
     for comment in comment_ids:
         sentence_ids = comments_d[comment]["sentence_ids"]
         for sent_id in sentence_ids:
             rows.append(sentence_ids_to_rows[sent_id])
             y.append(sentence_ids_to_labels[sent_id])
-    return rows,y
+
+    sentences = db_helper.grab_segments(sentence_ids)
+    return rows,sentences,y
 
 def _make_interaction_features(all_sentence_ids, sentence_ids_to_parses, 
                                 sentence_ids_to_rows, sentence_texts, 
@@ -275,13 +284,37 @@ def _make_interaction_features(all_sentence_ids, sentence_ids_to_parses,
             if add_thread_level_interactions and sent_NNP not in sent_text:
                 # then this NNP was extracted from the reddit *thread*
                 # not the actual *comment* -- here we add interaction features
-                # that cross NNP's in threads with 
+                # that cross NNP's in threads with sentiment
                 if sentence_ids_to_sentiments[sent_id] > 0:
                     cur_doc_features.append("comment-%s-%s-positive" % 
-                                    (sentence_ids_to_subreddits[sent_id], s))      
-                
+                                   (sentence_ids_to_subreddits[sent_id], s))     
+                    thread_title, thread_id = db_helper.get_thread_title_and_id(sent_id) 
+                    '''
+                    if s=="god":
+                        print "god in %s (%s)" % (sent_id, sentence_ids_to_subreddits[sent_id])
+                        print "thread id: %s; title: %s" % (thread_id, thread_title)
+                        print sent_text
+                        print "\n"
+
+                    if s=="cruz":
+                        print "cruz in %s (%s)" % (sent_id, sentence_ids_to_subreddits[sent_id])
+                        print "thread id: %s title: %s" % (thread_id, thread_title)
+                        print sent_text
+                        print "\n"
+                    
+                    if s=="palin":
+                        print "palin in %s (%s)" % (sent_id, sentence_ids_to_subreddits[sent_id])
+                        print "thread id: %s title: %s" % (thread_id, thread_title)
+                        print sent_text
+                        print "\n"
+                    '''
+
             else:
                 NNPs.append(s)
+                #if sentence_ids_to_sentiments[sent_id] > 0:
+                    #pass#cur_doc_features
+                    #cur_doc_features.append("sentence-%s-%s-positive" % 
+                    #                   (sentence_ids_to_subreddits[sent_id], s)) 
             #pdb.set_trace()
         all_doc_features_d[sent_id] = cur_doc_features
 
@@ -329,11 +362,30 @@ def get_top_features(feature_weights_dict, n=100):
     # most positive features, most negative features
     return [x[0] for x in sorted_x[:n]], [x[0] for x in sorted_x[-n:]]
 
-def run_irony_experiments(iters=500):
+def run_irony_experiments(iters=500, at_least=2):
+    print "baseline"
     F_baseline_svm, recalls_baseline_svm, precisions_baseline_svm, features_baseline_svm = \
-            sentence_classification(iters=iters, save_feature_weights=True)
+            sentence_classification(iters=iters, save_feature_weights=True, verbose=False, 
+                                    at_least=at_least)
 
+    print "\n" + "-"*50 + "\n"
+    print "interactions, no sentiment"
     F_interactions, recalls_interactions, precisions_interactions, features_interactions = \
             sentence_classification(add_interactions=True, add_thread_level_interactions=True, 
-                add_sentiment=False, iters=iters, save_feature_weights=True)
+                add_sentiment=False, iters=iters, save_feature_weights=True, verbose=False,
+                at_least=at_least)
+
+    print "\n" + "-"*50 + "\n"
+    print "sentiment, no interactions"
+    F_interactions_sent, recalls_interactions_sent, precisions_interactions_sent, features_interactions_sent = \
+            sentence_classification(add_interactions=False, add_thread_level_interactions=False, 
+                add_sentiment=True, iters=iters, save_feature_weights=True, at_least=at_least)
+
+    print "\n" + "-"*50 + "\n"
+    print "interactions + sentiment"
+    F_interactions_sent, recalls_interactions_sent, precisions_interactions_sent, features_interactions_sent = \
+            sentence_classification(add_interactions=True, add_thread_level_interactions=True, 
+                add_sentiment=True, iters=iters, save_feature_weights=True, at_least=at_least)
+
+
 

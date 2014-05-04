@@ -118,7 +118,6 @@ def comments_to_disk(outpath="for-ben.txt"):
     sentence_ids, sentence_texts, sentence_lbls = get_texts_and_labels_for_sentences(
         sentence_ids, repeat=False, collapse=collapse_f, add_punctuation_features_to_text=False)
 
-    pdb.set_trace()
     #out_str = ["id\tlabel\ttext"]
     sentence_texts = [s.replace("\n", " ") for s in sentence_texts]
     with open(outpath, 'w') as out_file:
@@ -179,7 +178,7 @@ def any_irony():
 '''select comment_id from irony_label where count(*)'''
 def get_labeled_thrice_comments():
     cursor.execute(
-        '''select comment_id from irony_label group by comment_id having count(labeler_id) >= 3;'''
+        '''select comment_id from irony_label group by comment_id having count(distinct labeler_id) >= 3;'''
     )
 
     thricely_labeled_comment_ids = _grab_single_element(cursor.fetchall())
@@ -553,6 +552,10 @@ def n_users_labeled_as_irony(comment_id):
             where forced_decision=0 and comment_id = %s and label=1 and labeler_id in %s;''' % 
             (comment_id, labeler_id_str)))
     return ironic_lblers
+
+def get_thread_title_and_id(segment_id):
+    comment_id = _get_comment_id_for_sentence(segment_id)
+    return cursor.execute("select thread_title, id from irony_comment where id == '%s'" % comment_id).fetchall()[0]
 
 def get_urls(comment_ids):
     ids_str = _make_sql_list_str(comment_ids)
@@ -1993,6 +1996,14 @@ def ml_bow():
     print "F1s:"
     print Fs
 
+def grab_segments(sentence_id_list):
+    sentences = []
+    for id_ in sentence_id_list:
+        cursor.execute(
+            "select text from irony_commentsegment where id='%s'" % id_)
+        sentences.append(cursor.fetchall()[0][0].encode('utf-8').strip())
+    return sentences 
+
 def grab_comments(comment_id_list, verbose=False):
     comments_list = []
     for comment_id in comment_id_list:
@@ -2004,13 +2015,18 @@ def grab_comments(comment_id_list, verbose=False):
         comments_list.append(comment.encode('utf-8').strip())
     return comments_list
 
-def show_most_informative_features(vectorizer, clf, n=100):
+def show_most_informative_features(vectorizer, clf, n=100, return_sorted_list=False):
     c_f = sorted(zip(clf.coef_[0], vectorizer.get_feature_names()))
+    if return_sorted_list:
+        return c_f
     top = zip(c_f[:n], c_f[:-(n+1):-1])
     out_str = []
     for (c1,f1),(c2,f2) in top:
         out_str.append("\t%.4f\t%-15s\t\t%.4f\t%-15s" % (c1,f1,c2,f2))
+
     return "\n".join(out_str)
+
+   
 
 ################################################################################
 # retreive NNP(S) words given a segment_id (id -> irony_comment_segment).
