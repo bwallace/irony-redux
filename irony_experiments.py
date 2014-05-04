@@ -40,6 +40,7 @@ from interaction_term_vectorizer import InteractionTermCountVectorizer
 # module**
 # @TODO clean up annotation_stats, which is kind of a mess.
 import annotation_stats as db_helper
+import pastcomments_stats as dk
 
 # just a helper "sign" function
 sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
@@ -84,8 +85,14 @@ def sentence_classification(model="SVC",
         db_helper.get_texts_and_labels_for_sentences(all_sentence_ids, 
                                         repeat=False, collapse=collapse_f)
 
-    print len(sentence_lbls)
-    print sentence_lbls.count(1)
+    # print len(all_sentence_ids)
+    # dk_segment_ids, dk_irony = dk.sanity_check()
+    # dk_segment_ids = set(dk_segment_ids)
+    # for sentence_id in all_sentence_ids:
+    #     if sentence_id not in dk_segment_ids:
+    #         print sentence_id
+    # sys.exit(0)
+
 
     ####
     # set up some convenient dictionaries 
@@ -133,34 +140,31 @@ def sentence_classification(model="SVC",
     if add_sentiment:
         user_to_sentiment, subreddit_to_sentiment = db_helper.get_sentiment_distribution()
         sentence_ids_to_users = db_helper.get_sentence_ids_to_users()
-        
-        #val = 15
-        #print val
-        #print 'title sentiment discrepancy'
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
-        noredditor = 0
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             try:
                 dist0 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
+            except:
+                dist0 = np.array([0.2,] * 5)
+            try:
                 dist1 = subreddit_to_sentiment[sentence_ids_to_subreddits[sentence_id]]
             except:
-                noredditor += 1
-                dist0 = np.array([0.2,] * 5)
                 dist1 = np.array([0.2,] * 5)
             dist2 = np.array([0.01] * 5)
             dist2[sentence_ids_to_sentiments[sentence_id] + 2] += 0.95
-            X[i, X.shape[1] - 4] = pairwise.cosine_similarity(dist0, dist2)[0][0]
-            X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
-            #X[i, X.shape[1] - 1] = 1 if db_helper.kld(dist1, dist2) > 1.6 else -1
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
-            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)            
+            X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
+            #X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
+            ####### THE BELOW DON"T WORK ######
+            #X[i, X.shape[1] - 3] = 1 if sum(dist0[0:2]) > 0.65 and sum(dist2[3:5]) > 0.95 else -1
+            #X[i, X.shape[1] - 1] = 1 if pairwise.cosine_similarity(dist0, dist2)[0][0] < 0.65 else -1
+            #X[i, X.shape[1] - 3] = 1 if db_helper.kld(dist0, dist2) > 1.68 else -1            
             #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
             
             #X[i, X.shape[1] - 3] = 1 if db_helper.length_feature(sentence_id) < 15 else -1
             #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3]= db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
-        print noredditor
 
     # row normalize features. Make sure that you are not normalizing twice. 
     # Commnet out lines 993 and 994 in sklearn/feature_extract/text.py. 
