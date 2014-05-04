@@ -1259,7 +1259,6 @@ def sentence_classification(use_pretense=False, model="SVC",
                                         max_features=50000)
         X = vectorizer.fit_transform(sentence_texts)
 
-
     if tfidf:
         transformer = TfidfTransformer()
         X = transformer.fit_transform(X)
@@ -1268,18 +1267,37 @@ def sentence_classification(use_pretense=False, model="SVC",
         X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         list1, list2 = [], []
+        idf1 = {}
+        idf1[1] = 0
+        idf1[-1] = 0 
+        idf2 = [0] * 9
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
             #pdb.set_trace()
             #X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
             #X[i, X.shape[1] - 1] = get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
-            list1.append(1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1)
-            list2.append(get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments))
+            indicator = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
+            list1.append(indicator)
+            idf1[indicator] += 1
+            discrepancy = 1 if get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments) != 0 else 0
+            list2.append(discrepancy)
+            idf2[discrepancy + 4] += 1
+        #for i in xrange(X.shape[0]):
+        #    list1[i] *= np.log( (len(list1) + 1.) / idf1[list1[i]] )
+        #    list2[i] *= np.log( (len(list2) + 1.) / idf2[list2[i] + 4] )
         tmp1 = np.linalg.norm(np.array(list1))
         tmp2 = np.linalg.norm(np.array(list2))
+        print tmp1, tmp2
         for i, x1, x2 in zip(range(X.shape[0]), list1, list2):
             X[i, X.shape[1] - 1] = x1 / tmp1 if tfidf else x1
             X[i, X.shape[1] - 2] = x2 / tmp2 if tfidf else x2
+            #X[i, X.shape[1] - 1] = x2 / 100
+            #X[i, X.shape[1] - 1] = x1 
+            #X[i, X.shape[1] - 2] = x2 
+            #X[i, X.shape[1] - 1] = x1 * np.log(len(list2) * 1. / idf1[x1]) 
+            #X[i, X.shape[1] - 2] = x2 * np.log(len(list2) * 1. / idf2[x2 + 4])
+            #X[i, X.shape[1] - 1] = x2 * np.log(len(list2) * 1. / (sum(idf) - idf[4]))
+
             # Things don't work:
             #X[i, X.shape[1] - 1] = sentence_ids_to_sentiments[sentence_id]
             #X[i, X.shape[1] - 3] = -1 if len(sentence_ids_to_parses[sentence_id].split()) > 25 else 1        
@@ -1292,6 +1310,22 @@ def sentence_classification(use_pretense=False, model="SVC",
     # @TODO!
     #y = [max(lbls) for lbls in sentence_lbls]
     #y = sentence_lbls
+
+    # aa = 0
+    # bb = 0
+    # for i in xrange(X.shape[0]):
+    #     if X[i, X.shape[1] - 1] == -1:
+    #         aa = i
+    #         print X[i, X.shape[1] - 1]
+    #         break
+    # for i in xrange(X.shape[0]):
+    #     if X[i, X.shape[1] - 2] == 2:
+    #         bb = i
+    #         print X[i, X.shape[1] - 2]
+    #         break
+
+    # print X[aa, X.shape[1] - 1]
+    # print X[bb, X.shape[1] - 2]
 
     predicted_probabilities_of_being_liberal = []
     if use_pretense:
@@ -2095,8 +2129,13 @@ def length_feature():
         denom += count
     print mean / denom
 
+def length_feature(id):
+    cursor.execute('select tag from irony_commentsegment where id=%s' % id)
+    tagged_sentence = cursor.fetchall()[0][0].encode('utf-8')
+    return len(tagged_sentence.split())
+
 def get_labeled_thrice_segments():
-    cursor.execute('select segment_id from irony_label group by segment_id having count(labeler_id) >= 3')
+    cursor.execute('select segment_id from irony_label group by segment_id having count(distinct labeler_id) >= 3')
     thricely_labeled_segment_ids = _grab_single_element(cursor.fetchall())
     # TODO: The original somehow contains None. Figure out why.
     return thricely_labeled_segment_ids[1:]
@@ -2123,18 +2162,17 @@ def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
     comment_id = cursor.fetchall()[0][0]
     cursor.execute('select distinct id from irony_commentsegment where comment_id=%s' % comment_id)
     neighbors = [y[0] for y in cursor.fetchall()]
-    #counts = dict(zip([-2,-1,0,1,2], [0]*5))
     sents = []
     mean_sentiment = 0.
     for neighbor in neighbors:
         mean_sentiment += sentence_ids_to_sentiments[neighbor]
-        #counts[sentence_ids_to_sentiments[neighbor]] += 1
         sents.append(sentence_ids_to_sentiments[neighbor])
-    #return mean_sentiment / len(neighbors) - sentence_ids_to_sentiments[id]
-    #return mean_sentiment / len(neighbors) - sentence_ids_to_sentiments[id]
-    #return 1 if max(counts.iteritems(), key=operator.itemgetter(1))[1] == sentence_ids_to_sentiments[id] else 0
-    #return 1 if Counter(sents).most_common(1)[0][0] == sentence_ids_to_sentiments[id] else 0
-    return Counter(sents).most_common(1)[0][0] - sentence_ids_to_sentiments[id] # best so far
+    most_common = Counter(sents).most_common(1)[0][0]
+
+    cursor.execute('select title_sentiment from irony_comment where id=%s' % comment_id)
+    title_sentiment = cursor.fetchall()[0][0]
+    return most_common - sentence_ids_to_sentiments[id] # best so far
+    #return most_common - sentence_ids_to_sentiments[id], 1 if title_sentiment < 0 and sentence_ids_to_sentiments[id] > 0 else - 1
 
 def sentiment_stats():
     segment_ids = get_labeled_thrice_segments()
@@ -2151,6 +2189,53 @@ def sentiment_stats():
     normalized_n = [x / z for x in n_sentiment_distribution]
     print normalized_i
     print normalized_n
+
+def get_sentiment_distribution():
+    user_to_sentiment = {}
+    subreddit_to_sentiment = {}
+    cursor.execute('select redditor, subreddit, sentiment from irony_pastusercomment')
+    for tmp in cursor.fetchall():
+        user = tmp[0].encode('utf-8')
+        subreddit = tmp[1].encode('utf-8')
+        sentiment = tmp[2]
+        if sentiment == None:
+            continue
+        if user not in user_to_sentiment:
+            user_to_sentiment[user] = np.array([1.,] * 5)
+        if subreddit not in subreddit_to_sentiment:
+            subreddit_to_sentiment[subreddit] = np.array([1.,] * 5)
+        sentiment = np.array([int(x) for x in sentiment.encode('utf-8').split(',')])
+        user_to_sentiment[user] += sentiment
+        subreddit_to_sentiment[subreddit] += sentiment
+    # normalizing distributions
+    for key in user_to_sentiment:
+        user_to_sentiment[key] /= np.array([sum(user_to_sentiment[key]),]*5)
+    for key in subreddit_to_sentiment:
+        subreddit_to_sentiment[key] /= np.array([sum(subreddit_to_sentiment[key]),]*5)
+        
+    return user_to_sentiment, subreddit_to_sentiment
+
+def kld(p, q):
+    n = len(p)
+    tmp = 0
+    for i in xrange(n):
+        tmp += np.log(p[i] / q[i]) * p[i]
+    return tmp
+
+def get_sentence_ids_to_users():
+    sentence_ids_to_users = {}
+    comment_ids_to_users = {}
+    cursor.execute('select id, redditor from irony_comment')
+    for tmp in cursor.fetchall():
+        comment_id = tmp[0]
+        redditor = tmp[1].encode('utf-8')
+        comment_ids_to_users[comment_id] = redditor
+    cursor.execute('select id, comment_id from irony_commentsegment')
+    for tmp in cursor.fetchall():
+        sentence_id = tmp[0]
+        comment_id = tmp[1]
+        sentence_ids_to_users[sentence_id] = comment_ids_to_users[comment_id]
+    return sentence_ids_to_users
     
 def experiment(model="SGD", verbose=False):
     labeled_segment_ids = get_labeled_thrice_segments()
