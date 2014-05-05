@@ -140,14 +140,14 @@ def sentence_classification(model="SVC",
     if add_sentiment:
         user_to_sentiment, subreddit_to_sentiment = db_helper.get_sentiment_distribution()
         sentence_ids_to_users = db_helper.get_sentence_ids_to_users()
-        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 2)))
+        X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 3)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
-            try:
-                dist0 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
-            except:
-                dist0 = np.array([0.2,] * 5)
+            # try:
+            #     dist0 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
+            # except:
+            #     dist0 = np.array([0.2,] * 5)
             try:
                 dist1 = subreddit_to_sentiment[sentence_ids_to_subreddits[sentence_id]]
             except:
@@ -156,14 +156,15 @@ def sentence_classification(model="SVC",
             dist2[sentence_ids_to_sentiments[sentence_id] + 2] += 0.95
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
             X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
-            #X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
+            X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
             ####### THE BELOW DON"T WORK ######
             #X[i, X.shape[1] - 3] = 1 if sum(dist0[0:2]) > 0.65 and sum(dist2[3:5]) > 0.95 else -1
             #X[i, X.shape[1] - 1] = 1 if pairwise.cosine_similarity(dist0, dist2)[0][0] < 0.65 else -1
             #X[i, X.shape[1] - 3] = 1 if db_helper.kld(dist0, dist2) > 1.68 else -1            
             #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
-            
-            #X[i, X.shape[1] - 3] = 1 if db_helper.length_feature(sentence_id) < 15 else -1
+
+            #tmp = db_helper.length_feature(sentence_id)
+            #X[i, X.shape[1] - 1] = 1 if tmp >= 3 and tmp <= 14 else 0
             #X[i, X.shape[1] - 2], X[i, X.shape[1] - 3]= db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
 
     # row normalize features. Make sure that you are not normalizing twice. 
