@@ -2157,6 +2157,13 @@ def get_sentiment(id):
     cursor.execute('select sentiment from irony_commentsegment where id=%s' % id)
     return cursor.fetchall()[0][0]
 
+def get_upvotes(id):
+    cursor.execute('select comment_id from irony_commentsegment where id=%s' % id)
+    comment_id = cursor.fetchall()[0][0]
+    cursor.execute('select upvotes, downvotes from irony_comment where id=%s' % comment_id)
+    votes = cursor.fetchall()[0]
+    return int((0.1 + votes[0]) / (0.2 + sum(votes)) * 100)
+
 def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
     cursor.execute('select comment_id from irony_commentsegment where id=%s' % id)
     comment_id = cursor.fetchall()[0][0]
@@ -2172,6 +2179,7 @@ def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
     cursor.execute('select title_sentiment from irony_comment where id=%s' % comment_id)
     title_sentiment = cursor.fetchall()[0][0]
     return most_common - sentence_ids_to_sentiments[id] # best so far
+    #return mean_sentiment / len(neighbors), title_sentiment
     #return most_common - sentence_ids_to_sentiments[id], 1 if title_sentiment < 0 and sentence_ids_to_sentiments[id] > 0 else - 1
 
 def sentiment_stats():

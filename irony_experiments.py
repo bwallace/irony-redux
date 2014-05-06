@@ -157,6 +157,9 @@ def sentence_classification(model="SVC",
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
             X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
             X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
+            # the following feature increases recall a lot
+            #X[i, X.shape[1] - 4] = db_helper.get_upvotes(sentence_id)
+
             ####### THE BELOW DON"T WORK ######
             #X[i, X.shape[1] - 3] = 1 if sum(dist0[0:2]) > 0.65 and sum(dist2[3:5]) > 0.95 else -1
             #X[i, X.shape[1] - 1] = 1 if pairwise.cosine_similarity(dist0, dist2)[0][0] < 0.65 else -1
