@@ -2162,7 +2162,9 @@ def get_upvotes(id):
     comment_id = cursor.fetchall()[0][0]
     cursor.execute('select upvotes, downvotes from irony_comment where id=%s' % comment_id)
     votes = cursor.fetchall()[0]
-    return int((0.1 + votes[0]) / (0.2 + sum(votes)) * 100)
+    #import pdb; pdb.set_trace()
+    #return int((0.1 + votes[0]) / (0.2 + sum(votes)) * 100)
+    return float(votes[0]+1)/float(sum(votes) + 2.0)
 
 def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
     cursor.execute('select comment_id from irony_commentsegment where id=%s' % id)
