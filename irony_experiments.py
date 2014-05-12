@@ -40,7 +40,7 @@ from interaction_term_vectorizer import InteractionTermCountVectorizer
 # module**
 # @TODO clean up annotation_stats, which is kind of a mess.
 import annotation_stats as db_helper
-import pastcomments_stats as dk
+#import pastcomments_stats as dk
 
 # just a helper "sign" function
 sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
@@ -138,8 +138,13 @@ def sentence_classification(model="SVC",
         X = vectorizer.fit_transform(sentence_texts)
 
     if add_sentiment:
+<<<<<<< HEAD
         user_to_sentiment, subreddit_to_sentiment, usersubreddit_to_sentiment = db_helper.get_sentiment_distribution()
         sentence_ids_to_users, _ = db_helper.get_sentence_ids_to_users_and_subreddits()
+=======
+        user_to_sentiment, subreddit_to_sentiment = db_helper.get_sentiment_distribution()
+        sentence_ids_to_users = db_helper.get_sentence_ids_to_users()
+>>>>>>> 0d3ee6ec1c32718bc86deb6ba2db6b41b1b94cc6
         X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         for i in xrange(X.shape[0]):
@@ -163,8 +168,12 @@ def sentence_classification(model="SVC",
             X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
             X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
             # the following feature increases recall a lot
+<<<<<<< HEAD
             #X[i, X.shape[1] - 10] = 1 if db_helper.get_upvotes(sentence_id) >= 0.5 else 0
             #X[i, X.shape[1] - 4] = 1
+=======
+            X[i, X.shape[1] - 4] = db_helper.get_upvotes(sentence_id)
+>>>>>>> 0d3ee6ec1c32718bc86deb6ba2db6b41b1b94cc6
 
             ####### THE BELOW DON"T WORK ######
             #X[i, X.shape[1] - 3] = 1 if sum(dist0[0:2]) > 0.65 and sum(dist2[3:5]) > 0.95 else -1
@@ -198,6 +207,7 @@ def sentence_classification(model="SVC",
     # record all metrics for each train/test split
     # (this is what we use for our empirical counts)
     recalls, precisions, Fs, AUCs = [], [], [], []
+    accuracies = []
     #for train, test in kf:
     cur_iter = 0
     
@@ -251,6 +261,9 @@ def sentence_classification(model="SVC",
         recalls.append(recall[1])
         precisions.append(prec[1])
         Fs.append(f[1])
+
+        accuracy = sklearn.metrics.accuracy_score(y_test, preds)
+        accuracies.append(accuracy)
         #pdb.set_trace()
         cur_iter += 1
 
@@ -264,6 +277,7 @@ def sentence_classification(model="SVC",
     print "-"*20 + "results" + "-"*20
     print "average F: %s \naverage recall: %s \naverage precision: %s " % (
                 avg(Fs), avg(recalls), avg(precisions))
+    print "average overall accuracy: %s" % avg(accuracies)
     print "-"*49
     return Fs, recalls, precisions, feature_weights
 
@@ -402,18 +416,21 @@ def get_top_features(feature_weights_dict, n=100):
     return [x[0] for x in sorted_x[:n]], [x[0] for x in sorted_x[-n:]]
 
 def run_irony_experiments(iters=500, at_least=2):
+    
     print "baseline"
     F_baseline_svm, recalls_baseline_svm, precisions_baseline_svm, features_baseline_svm = \
             sentence_classification(iters=iters, save_feature_weights=True, verbose=False, 
                                     at_least=at_least)
 
+    
+    '''
     print "\n" + "-"*50 + "\n"
     print "interactions, no sentiment"
     F_interactions, recalls_interactions, precisions_interactions, features_interactions = \
             sentence_classification(add_interactions=True, add_thread_level_interactions=True, 
                 add_sentiment=False, iters=iters, save_feature_weights=True, verbose=False,
                 at_least=at_least)
-
+    '''
     print "\n" + "-"*50 + "\n"
     print "sentiment, no interactions"
     F_interactions_sent, recalls_interactions_sent, precisions_interactions_sent, features_interactions_sent = \
