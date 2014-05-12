@@ -40,7 +40,6 @@ from interaction_term_vectorizer import InteractionTermCountVectorizer
 # module**
 # @TODO clean up annotation_stats, which is kind of a mess.
 import annotation_stats as db_helper
-#import pastcomments_stats as dk
 
 # just a helper "sign" function
 sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
@@ -84,14 +83,6 @@ def sentence_classification(model="SVC",
     all_sentence_ids, sentence_texts, sentence_lbls = \
         db_helper.get_texts_and_labels_for_sentences(all_sentence_ids, 
                                         repeat=False, collapse=collapse_f)
-
-    # print len(all_sentence_ids)
-    # dk_segment_ids, dk_irony = dk.sanity_check()
-    # dk_segment_ids = set(dk_segment_ids)
-    # for sentence_id in all_sentence_ids:
-    #     if sentence_id not in dk_segment_ids:
-    #         print sentence_id
-    # sys.exit(0)
 
 
     ####
@@ -138,13 +129,8 @@ def sentence_classification(model="SVC",
         X = vectorizer.fit_transform(sentence_texts)
 
     if add_sentiment:
-<<<<<<< HEAD
         user_to_sentiment, subreddit_to_sentiment, usersubreddit_to_sentiment = db_helper.get_sentiment_distribution()
         sentence_ids_to_users, _ = db_helper.get_sentence_ids_to_users_and_subreddits()
-=======
-        user_to_sentiment, subreddit_to_sentiment = db_helper.get_sentiment_distribution()
-        sentence_ids_to_users = db_helper.get_sentence_ids_to_users()
->>>>>>> 0d3ee6ec1c32718bc86deb6ba2db6b41b1b94cc6
         X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         for i in xrange(X.shape[0]):
@@ -167,13 +153,8 @@ def sentence_classification(model="SVC",
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
             X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
             X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
-            # the following feature increases recall a lot
-<<<<<<< HEAD
             #X[i, X.shape[1] - 10] = 1 if db_helper.get_upvotes(sentence_id) >= 0.5 else 0
             #X[i, X.shape[1] - 4] = 1
-=======
-            X[i, X.shape[1] - 4] = db_helper.get_upvotes(sentence_id)
->>>>>>> 0d3ee6ec1c32718bc86deb6ba2db6b41b1b94cc6
 
             ####### THE BELOW DON"T WORK ######
             #X[i, X.shape[1] - 3] = 1 if sum(dist0[0:2]) > 0.65 and sum(dist2[3:5]) > 0.95 else -1
