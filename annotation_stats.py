@@ -24,12 +24,7 @@ from sklearn.feature_extraction.text import CountVectorizer
 #
 from interaction_term_vectorizer import InteractionTermCountVectorizer
 # antiquated!
-'''
-try:
-    from sklearn.feature_extraction.text2 import InteractionTermCountVectorizer
-except:
-    print "InteractionTermCountVectorizer not found!"
-'''
+
 from sklearn.cross_validation import KFold
 from sklearn.grid_search import GridSearchCV
 from sklearn.svm import SVC, NuSVC
@@ -65,23 +60,45 @@ i.e., this is you use in the 'agreement' function
 #db_path = "/Users/bwallace/dev/computational-irony/data-11-30/ironate.db"
 config = configparser.ConfigParser()
 config.read("irony.ini")
+
+# train database (used during development)
 db_path = config["Paths"]["DB_PATH"]
-print "database path: %s" % db_path
+print "train/dev database path: %s" % db_path
+conn = sqlite3.connect(db_path)
+cursor = conn.cursor()
+### we consider 4 active labelers
+######### WAS [2,4,5,6]
+### Sara is 8! added 7/23/14
+labelers_of_interest = [2,4,5,6,8] # TMP TMP TMP
+
+# test database -- contains comments since tagged
+test_db_path = config["Paths"]["TEST_DB_PATH"]
+print "test database path: %s" % test_db_path
+conn_test = sqlite3.connect(test_db_path)
+test_cursor = conn_test.cursor()
+
 
 ####
 # for ACL paper: "/Users/bwallace/dev/computational-irony/data-2-7/ironate.db"
 
-#db_path = "/Users/bwallace/dev/computational-irony/irony-redux/ironate-dk2.db"
-
-conn = sqlite3.connect(db_path)
-cursor = conn.cursor()
-### we consider 4 active labelers
-labelers_of_interest = [2,4,5,6] # TMP TMP TMP
-
 comment_sep_str = "\n\n------------------------------------------\n"
 
-def _make_sql_list_str(ls):
-    return "(" + ",".join([str(x_i) for x_i in ls]) + ")"
+def get_labelers_for_comments(comment_ids, test_db=False):
+    a_cursor = cursor
+    if test_db:
+        a_cursor = test_cursor
+    comment_ids_str = _make_sql_list_str(comment_ids)
+    a_cursor.execute(
+        '''select distinct labeler_id from irony_label where comment_id in %s;''' % 
+            comment_ids_str
+    )
+    return a_cursor.fetchall()
+    
+def _make_sql_list_str(ls, strs=False):
+    if not strs:
+        return "(" + ",".join([str(x_i) for x_i in ls]) + ")"
+    else:
+        return "(" + ",".join(["'" + str(x_i) + "'" for x_i in ls]) + ")"
 
 labeler_id_str = _make_sql_list_str(labelers_of_interest)
 
@@ -184,6 +201,29 @@ def get_labeled_thrice_comments():
     thricely_labeled_comment_ids = _grab_single_element(cursor.fetchall())
     print "%s comments have been labeled by >= 3 people" % len(thricely_labeled_comment_ids)
     return thricely_labeled_comment_ids
+
+
+'''
+    collapse_f = lambda lbl_set: 1 if lbl_set.count(1) >= at_least else -1
+    all_sentence_ids, sentence_texts, sentence_lbls = \
+        db_helper.get_texts_and_labels_for_sentences(all_sentence_ids, 
+                                        repeat=False, collapse=collapse_f)
+'''
+
+def get_test_comment_ids():
+    test_cursor.execute(
+        '''select comment_id from irony_label group by comment_id having count(distinct labeler_id) >= 3;'''
+    )
+
+    test_labeled_comment_ids = _grab_single_element(test_cursor.fetchall())
+    train_labeled_comment_ids = get_labeled_thrice_comments()
+    test_labeled_comment_ids = [id_ for id_ in test_labeled_comment_ids if 
+                                    not id_ in train_labeled_comment_ids]
+    print "%s labeled test comments!" % len(test_labeled_comment_ids)
+    #grab_comments(test_labeled_comment_ids)
+    #pdb.set_trace()
+    return test_labeled_comment_ids
+
 
 def descriptive_stats():
     thricely_labeled_comment_ids = get_labeled_thrice_comments()
@@ -555,7 +595,16 @@ def n_users_labeled_as_irony(comment_id):
 
 def get_thread_title_and_id(segment_id):
     comment_id = _get_comment_id_for_sentence(segment_id)
-    return cursor.execute("select thread_title, id from irony_comment where id == '%s'" % comment_id).fetchall()[0]
+    return cursor.execute("select thread_title, thread_id from irony_comment where id == '%s'" % comment_id).fetchall()[0]
+
+
+def get_user_ids(comment_ids):
+    ids_str = _make_sql_list_str(comment_ids)
+    #'''select redditor from irony_pastusercomment where id in %s;''' % 
+    users = cursor.execute(
+            '''select redditor from irony_comment where id in %s;''' %
+                ids_str).fetchall()
+    return users
 
 def get_urls(comment_ids):
     ids_str = _make_sql_list_str(comment_ids)
@@ -808,6 +857,78 @@ def _get_subreddits(comment_ids):
         srs.append(sr[0])
     return srs
 
+def comment_count_for_user(user_id):
+    comment_ids = cursor.execute('''select id from irony_pastusercomment where redditor=%s''' % user_id).fetchall()
+    return _grab_single_element(comment_ids)
+
+def get_entities_from_prev_comment(comment_id):
+    entities = cursor.execute('''select NP from irony_pastusercommententity where comment_id=%s;''' % comment_id).fetchall()
+    return _grab_single_element(entities)
+
+def get_all_previous_subreddits_for_user(user_id):
+    subreddits = cursor.execute(
+            '''select subreddit from irony_pastusercomment where redditor='%s';''' % user_id).fetchall()
+    return _grab_single_element(subreddits)
+
+
+
+def get_all_previous_comment_ids_for_users(user_ids, include_sentiment=False, limit_to_subreddits=None):
+    if limit_to_subreddits is None:
+        limit_to_subreddits = []
+
+    subreddit_str = _make_sql_list_str(limit_to_subreddits, strs=True)
+    user_ids_str = _make_sql_list_str(user_ids, strs=True)
+    comments = None 
+
+    query_str = None
+    if not include_sentiment:
+        query_str = '''select id, redditor, permalink, comment_text from irony_pastusercomment where redditor in %s''' % user_ids_str
+        #comments = cursor.execute(query_str).fetchall()
+    else:
+        query_str = '''select id, redditor, permalink, comment_text, sentiment from irony_pastusercomment where redditor in %s''' % user_ids_str
+    
+
+    if len(limit_to_subreddits) > 0:
+        query_str += " and subreddit in %s;" % subreddit_str
+    else:
+        query_str += ";"
+
+    #pdb.set_trace()
+    comments = cursor.execute(query_str).fetchall()
+
+    comments_d = defaultdict(list) 
+
+    comment_already_saved = \
+        lambda comment_url, user : comment_url in [
+                prev_comment[1] for prev_comment in comments_d[user]]
+
+    #pdb.set_trace()
+    for comment in comments:
+        if include_sentiment:
+            prev_comment_id, redditor, permalink, text, sentiment = comment
+            if not comment_already_saved(permalink, redditor):
+                #pdb.set_trace()
+                sentiments = [-2, -1, 0, 1, 2]
+                try:
+                    sentiment_counts = [int(c_i) for c_i in sentiment.split(",")]
+                except:
+                    print "failed to get sentiment for comment: %s with sentiments: %s" % (
+                            text, sentiment)
+                weighted_sent_avg = 0.0
+                # alternatively, could do max/most extreme???
+                for j, sentiment in enumerate(sentiments):
+                    weighted_sent_avg += sentiment * sentiment_counts[j]
+
+                weighted_sent_avg = weighted_sent_avg / float(sum(sentiment_counts))
+                comments_d[redditor].append((text, permalink, prev_comment_id, weighted_sent_avg))
+        else:
+            prev_comment_id, redditor, permalink, text = comment 
+            if not comment_already_saved(permalink, redditor):
+                comments_d[redditor].append((text, permalink, prev_comment_id))
+
+    # comments d is a dictionary that maps redditor id's
+    # to lists of (comment text, permalink) tuples
+    return comments_d
 
 def get_all_sentences_from_subreddit(subreddit):
     cursor.execute(
@@ -825,7 +946,7 @@ def get_sentence_ids_for_comment(comment_id):
     # all the subreddits are the same, of course, so just return the first.
     return (sentence_ids, subreddits[0])
 
-def get_sentence_ids_for_comments(comment_ids):
+def get_sentence_ids_for_comments(comment_ids, return_dict=False):
     comments_ids_str = _make_sql_list_str(comment_ids)
 
     segment_ids_and_srs = cursor.execute(
@@ -838,6 +959,8 @@ def get_sentence_ids_for_comments(comment_ids):
         sentence_ids.append(segment[0])
         subreddits.append(segment[1])
 
+    if return_dict:
+        d = dict(zip(sentence_ids, subreddits))
     return (sentence_ids, subreddits)
 
 def get_sentiments(sentence_ids):
@@ -855,13 +978,14 @@ def get_parses(sentence_ids):
     return parse_tags
 
 def get_texts_and_labels_for_sentences(sentence_ids, repeat=False, collapse=max, 
-                                        add_punctuation_features_to_text=True):
+                                        add_punctuation_features_to_text=True, use_test_db=False):
 
+    cursor_ = cursor if not use_test_db else test_cursor
     # this is naive...
     sentence_texts, sentence_lbls = [], []
     new_sentence_ids = [] # only relevant if we're 'repeating' (replicating sentences)
     for id_ in sentence_ids:
-        sentence_text = cursor.execute(
+        sentence_text = cursor_.execute(
                     '''select text from irony_commentsegment where id=%s;''' % id_).fetchall()[0][0]
 
         if add_punctuation_features_to_text:
@@ -874,7 +998,7 @@ def get_texts_and_labels_for_sentences(sentence_ids, repeat=False, collapse=max,
             new_sentence_ids.extend([id_, id_, id_])
 
       
-        lbls = [lbls[0] for lbls in cursor.execute(
+        lbls = [lbls[0] for lbls in cursor_.execute(
                 '''select label from irony_label where segment_id=%s
                     and forced_decision=0 order by segment_id;''' % id_).fetchall()]
         if not repeat:
@@ -885,6 +1009,14 @@ def get_texts_and_labels_for_sentences(sentence_ids, repeat=False, collapse=max,
     return (new_sentence_ids, sentence_texts, sentence_lbls)
 
 
+def get_all_comments_from_subreddit2(subreddit):
+    #test_cursor.execute('''select distinct comment_id from ''')
+    test_cursor.execute('''select distinct id from irony_comment where subreddit='%s';''' % subreddit)
+    subreddit_comments = _grab_single_element(test_cursor.fetchall())
+
+    return list(set(subreddit_comments))
+
+# really don't know what you were going for here, the above is much, much simpler...
 def get_all_comments_from_subreddit(subreddit):
     #all_comment_ids = get_labeled_thrice_comments()
     #subreddits = _get_subreddits(all_comment_ids)
@@ -1060,11 +1192,14 @@ def _get_NNP_tokens(all_sentence_ids, sentence_ids_to_parses, combine_adjacent=T
                 cur_word = None
 
         if add_comment_NNPs:
-            for tok in comment_title_parse.split(" "):
-                word, tag = tok.split("/")[-2:]
-                if tag == "NNP":
-                    sentence_NNP_tokens.append(word)
-                    #sentence_NNP_tokens.append("COMMENT%s" % word)
+            if comment_title_parse is None:
+                pdb.set_trace()
+            else:
+                for tok in comment_title_parse.split(" "):
+                    word, tag = tok.split("/")[-2:]
+                    if tag == "NNP":
+                        sentence_NNP_tokens.append(word)
+                        #sentence_NNP_tokens.append("COMMENT%s" % word)
 
                 
         all_sentence_NNP_tokens.append(sentence_NNP_tokens)
