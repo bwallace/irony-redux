@@ -46,7 +46,6 @@ from sklearn.linear_model import stochastic_gradient_i2 # ours ++
 # module**
 # @TODO clean up annotation_stats, which is kind of a mess.
 import annotation_stats as db_helper
-#import pastcomments_stats as dk
 
 # just a helper "sign" function
 sgn = lambda x : [1 if x_i > 0 else -1 for x_i in x]
@@ -457,6 +456,7 @@ def sentence_classification(model="SVC",
         db_helper.get_texts_and_labels_for_sentences(all_sentence_ids, 
                                         repeat=False, collapse=collapse_f)
 
+
     ####
     # set up some convenient dictionaries 
     sentence_ids_to_parses = dict(zip(all_sentence_ids, db_helper.get_parses(all_sentence_ids)))
@@ -581,27 +581,32 @@ def sentence_classification(model="SVC",
     '''
     # this has been supplanted by the sentiment feature in the interactions...
     if add_sentiment:
-        user_to_sentiment, subreddit_to_sentiment = db_helper.get_sentiment_distribution()
-        sentence_ids_to_users = db_helper.get_sentence_ids_to_users()
+        user_to_sentiment, subreddit_to_sentiment, usersubreddit_to_sentiment = db_helper.get_sentiment_distribution()
+        sentence_ids_to_users, _ = db_helper.get_sentence_ids_to_users_and_subreddits()
         X0 = scipy.sparse.csr.csr_matrix(np.zeros((X.shape[0], 4)))
         X = scipy.sparse.hstack((X, X0)).tocsr()
         for i in xrange(X.shape[0]):
             sentence_id = all_sentence_ids[i]
-            # try:
-            #     dist0 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
-            # except:
-            #     dist0 = np.array([0.2,] * 5)
-            try:
-                dist1 = subreddit_to_sentiment[sentence_ids_to_subreddits[sentence_id]]
-            except:
+            #dist0 = user_to_sentiment[sentence_ids_to_users[sentence_id]]
+            user = sentence_ids_to_users[sentence_id]
+            subreddit = sentence_ids_to_subreddits[sentence_id]
+            if user in usersubreddit_to_sentiment and subreddit in usersubreddit_to_sentiment[user]:
+                dist0 = usersubreddit_to_sentiment[user][subreddit]
+            elif user in user_to_sentiment:
+                dist0 = user_to_sentiment[user]
+            else:
+                dist0 = np.array([0.2,] * 5)
+            if subreddit in subreddit_to_sentiment:
+                dist1 = subreddit_to_sentiment[subreddit]
+            else:
                 dist1 = np.array([0.2,] * 5)
             dist2 = np.array([0.01] * 5)
             dist2[sentence_ids_to_sentiments[sentence_id] + 2] += 0.95
             X[i, X.shape[1] - 1] = 1 if sentence_ids_to_sentiments[sentence_id] <= 0 else -1
             X[i, X.shape[1] - 2] = db_helper.get_sentiment_discrepancy(sentence_id, sentence_ids_to_sentiments)
             X[i, X.shape[1] - 3] = pairwise.cosine_similarity(dist1, dist2)[0][0]
-            # the following feature increases recall a lot
-            X[i, X.shape[1] - 4] = db_helper.get_upvotes(sentence_id)
+            #X[i, X.shape[1] - 10] = 1 if db_helper.get_upvotes(sentence_id) >= 0.5 else 0
+            #X[i, X.shape[1] - 4] = 1
 
             ####### THE BELOW DON"T WORK ######
             #X[i, X.shape[1] - 3] = 1 if sum(dist0[0:2]) > 0.65 and sum(dist2[3:5]) > 0.95 else -1

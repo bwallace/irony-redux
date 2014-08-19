@@ -2297,8 +2297,6 @@ def get_upvotes(id):
     comment_id = cursor.fetchall()[0][0]
     cursor.execute('select upvotes, downvotes from irony_comment where id=%s' % comment_id)
     votes = cursor.fetchall()[0]
-    #import pdb; pdb.set_trace()
-    #return int((0.1 + votes[0]) / (0.2 + sum(votes)) * 100)
     return float(votes[0]+1)/float(sum(votes) + 2.0)
 
 def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
@@ -2316,6 +2314,7 @@ def get_sentiment_discrepancy(id, sentence_ids_to_sentiments):
     cursor.execute('select title_sentiment from irony_comment where id=%s' % comment_id)
     title_sentiment = cursor.fetchall()[0][0]
     return most_common - sentence_ids_to_sentiments[id] # best so far
+    #return most_common - sentence_ids_to_sentiments[id], title_sentiment - sentence_ids_to_sentiments[id]
     #return mean_sentiment / len(neighbors), title_sentiment
     #return most_common - sentence_ids_to_sentiments[id], 1 if title_sentiment < 0 and sentence_ids_to_sentiments[id] > 0 else - 1
 
@@ -2337,6 +2336,7 @@ def sentiment_stats():
 
 def get_sentiment_distribution():
     user_to_sentiment = {}
+    usersubreddit_to_sentiment = {}
     subreddit_to_sentiment = {}
     cursor.execute('select redditor, subreddit, sentiment from irony_pastusercomment')
     for tmp in cursor.fetchall():
@@ -2347,18 +2347,25 @@ def get_sentiment_distribution():
             continue
         if user not in user_to_sentiment:
             user_to_sentiment[user] = np.array([1.,] * 5)
+            usersubreddit_to_sentiment[user] = {}
         if subreddit not in subreddit_to_sentiment:
             subreddit_to_sentiment[subreddit] = np.array([1.,] * 5)
+        if subreddit not in usersubreddit_to_sentiment[user]:
+            usersubreddit_to_sentiment[user][subreddit] = np.array([1.,] * 5)
         sentiment = np.array([int(x) for x in sentiment.encode('utf-8').split(',')])
         user_to_sentiment[user] += sentiment
         subreddit_to_sentiment[subreddit] += sentiment
+        usersubreddit_to_sentiment[user][subreddit] = np.array([1.,] * 5)
     # normalizing distributions
     for key in user_to_sentiment:
         user_to_sentiment[key] /= np.array([sum(user_to_sentiment[key]),]*5)
     for key in subreddit_to_sentiment:
         subreddit_to_sentiment[key] /= np.array([sum(subreddit_to_sentiment[key]),]*5)
+    for u in usersubreddit_to_sentiment:
+        for s in usersubreddit_to_sentiment[u]:
+            usersubreddit_to_sentiment[u][s] /= np.array([sum(usersubreddit_to_sentiment[u][s]),] * 5)
         
-    return user_to_sentiment, subreddit_to_sentiment
+    return user_to_sentiment, subreddit_to_sentiment, usersubreddit_to_sentiment
 
 def kld(p, q):
     n = len(p)
@@ -2367,20 +2374,25 @@ def kld(p, q):
         tmp += np.log(p[i] / q[i]) * p[i]
     return tmp
 
-def get_sentence_ids_to_users():
+def get_sentence_ids_to_users_and_subreddits():
     sentence_ids_to_users = {}
+    sentence_ids_to_subreddits = {}
     comment_ids_to_users = {}
-    cursor.execute('select id, redditor from irony_comment')
+    comment_ids_to_subreddits = {}    
+    cursor.execute('select id, redditor, subreddit from irony_comment')
     for tmp in cursor.fetchall():
         comment_id = tmp[0]
         redditor = tmp[1].encode('utf-8')
         comment_ids_to_users[comment_id] = redditor
+        subreddit = tmp[2].encode('utf-8')
+        comment_ids_to_subreddits[comment_id] = subreddit
     cursor.execute('select id, comment_id from irony_commentsegment')
     for tmp in cursor.fetchall():
         sentence_id = tmp[0]
         comment_id = tmp[1]
         sentence_ids_to_users[sentence_id] = comment_ids_to_users[comment_id]
-    return sentence_ids_to_users
+        sentence_ids_to_subreddits[sentence_id] = comment_ids_to_subreddits[comment_id]
+    return sentence_ids_to_users, sentence_ids_to_subreddits
     
 def experiment(model="SGD", verbose=False):
     labeled_segment_ids = get_labeled_thrice_segments()
