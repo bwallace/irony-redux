@@ -23,15 +23,32 @@ def delta_dist_plots(baseline_results, results, names,
                 print names
                 axes[i,j].yaxis.set_label(names[i])
             deltas = np.array(res[metric_index]) - np.array(baseline_results[metric_index])
-            #bins = 10
-            #if j == 2:
-            #    bins = bins / 2
 
+            # this is really just because once in a (long) while
+            # we get very large or small diffs, which screws up the
+            # histogram (since we need to make a new bin for them). 
+            # so we always drop outliers in both directions here.
             outlier_indices =  [np.argmin(deltas), np.argmax(deltas)]
             #outliers_indices = np.where(outliers)
+            print "---"
+            print names[i]
+            print metrics[j]
+            print "EXCLUDING min: %s; max: %s" % (np.min(deltas), np.max(deltas))
+            print "---"
+
             deltas = np.delete(deltas, outlier_indices)
             if exclude_greater_than:
+                # if you do pass something in here,
+                # make sure you note this in the write-up!!!
+                # note: we are not currently setting this flag
+                # for figures in paper!
                 deltas1 = [d for d in list(deltas) if -.1 <= d <= .1]
+
+                print "total excluded: %s" % len(deltas1)
+                print "< -.1: %s; > .1: %s" % (
+                        len([d for d in deltas1 if d < -.1]),
+                        len([d for d in deltas1 if d > .1]))
+                print "---"
                 deltas = np.array(deltas1)
                 #indices1 = deltas[deltas < -1*exclude_greater_than]
                 #print "excluding %s < %s" %(len(indices1), -1*exclude_greater_than)

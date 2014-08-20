@@ -125,6 +125,10 @@ def run_test_exps(n_iters=100):
     #print "BoW/NNPxsubreddit/Thread interactions x sent"
     #BoW_NNP_and_thread_sent = irony_experiments.sentence_classification_heldout(model="SGD", add_interactions=True,  add_sentiment=False, add_thread_level_interactions=True, add_interaction_sentiment=True, seed=50, n_runs=n_iters)
 
+    print "NNP+ x subreddit x sent /l1-l2"
+    BoW_NNP_and_thread_sent_l1l2 = irony_experiments.sentence_classification_heldout(add_interactions=True, interaction_baseline=False, add_thread_level_interactions=True, add_sentiment=False, add_interaction_sentiment=True, seed=50, model="SGDi", n_runs=n_iters)
+
+
     print "BoW/NNP+/Thread + sent"
     #BoW_NNP_and_thread_sent = irony_experiments.sentence_classification(add_interactions=True, cluster_interactions=False, interaction_baseline=False, add_thread_level_interactions=True, add_sentiment=True, add_interaction_sentiment=True, model="SGD", iters=niters)
     BoW_NNP_and_thread_sent_overall = irony_experiments.sentence_classification_heldout(model="SGD", add_interactions=True, add_sentiment=True, interaction_baseline=False, add_thread_level_interactions=True, add_interaction_sentiment=True, seed=50, n_runs=n_iters)
@@ -138,8 +142,8 @@ def run_test_exps(n_iters=100):
     #BoW_NNP_and_thread_sent_l1l2 = irony_experiments.sentence_classification(add_interactions=True, cluster_interactions=False, interaction_baseline=False, add_thread_level_interactions=True, add_sentiment=True, add_interaction_sentiment=True, model="SGDi", iters=niters)
     #BoW_and_NNP_threadl1l2 = irony_experiments.sentence_classification_heldout(model="SGDi", add_interactions=True,  add_sentiment=False, add_thread_level_interactions=True, add_interaction_sentiment=True, seed=50, n_runs=n_iters)
     
-    results_names = ["baseline", "(overall) sent.", "NNP", r"NNP $\times$ subreddit", r"NNP+ $\times$ sent. $\times$ subreddit", r"NNP+ $\times$ sent. $\times$ subreddit + sent.", r"NNP+ $\times$ sent. $\times$ subreddit + sent. ($\ell_{1}$ $\ell_{2}$)"]
-    results = [baseline, BoW_just_sent, BoW_and_NNP, BoW_and_sr_NNP, BoW_NNP_and_thread_sent, BoW_NNP_and_thread_sent_overall, BoW_and_NNP_threadl1l2 ]
+    results_names = ["baseline", "(overall) sent.", "NNP", r"NNP $\times$ subreddit", r"NNP+ $\times$ sent. $\times$ subreddit", r"NNP+ $\times$ sent. $\times$ subreddit ($\ell_{1}$ $\ell_{2}$)", r"NNP+ $\times$ sent. $\times$ subreddit + sent.", r"NNP+ $\times$ sent. $\times$ subreddit + sent. ($\ell_{1}$ $\ell_{2}$)"]
+    results = [baseline, BoW_just_sent, BoW_and_NNP, BoW_and_sr_NNP, BoW_NNP_and_thread_sent, BoW_NNP_and_thread_sent_l1l2, BoW_NNP_and_thread_sent_overall, BoW_and_NNP_threadl1l2 ]
     
     #r"NNP \times sent. \times subreddit + sent.", r"NNP \times sentiment \times subreddit + sent. ($\ell_{1}$ $\ell_{2}$)"
     #results_names = ["baseline", "NNP", r"NNP+ $\times$ sent. $\times$ subreddit + sent.", r"NNP+ $\times$ sent. $\times$ subreddit + sent. ($\ell_{1}$ $\ell_{2}$)"]
@@ -221,7 +225,7 @@ def feature_weight_tables(l1l2=True, n_runs=100, filter_str=None):
         filtered = [f for f in sorted_features if filter_str in f[0]]
         sorted_features = filtered
 
-    pdb.set_trace()
+    
 
     latex_str = r'''
         \begin{table} \centering \footnotesize
